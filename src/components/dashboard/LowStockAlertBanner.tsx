@@ -86,8 +86,8 @@ export function LowStockAlertBanner() {
 
   if (lowItems.length === 0) {
     return (
-      <div className="card flex items-center gap-2 border-success/30 bg-success/5 text-sm text-success">
-        <CheckCircle2 size={16} />
+      <div className="card flex items-center gap-2.5 border-success/30 bg-success/5 text-sm text-success">
+        <CheckCircle2 size={18} />
         Nenhum item abaixo do estoque mínimo.
       </div>
     );
@@ -95,17 +95,17 @@ export function LowStockAlertBanner() {
 
   return (
     <div className="card border-danger/30 bg-danger/5">
-      <div className="flex items-center gap-2 text-sm font-semibold text-danger">
-        <AlertTriangle size={16} />
+      <div className="flex items-center gap-2.5 text-sm font-semibold text-danger">
+        <AlertTriangle size={18} />
         {lowItems.length} {lowItems.length === 1 ? "item abaixo" : "itens abaixo"} do estoque mínimo
       </div>
-      <ul className="mt-2 flex flex-col gap-1">
+      <ul className="mt-3 flex flex-col divide-y divide-danger/10">
         {lowItems.map((item) => (
-          <li key={item.id} className="flex items-center justify-between text-sm">
-            <Link href={`/itens/${item.id}`} className="text-foreground hover:underline">
+          <li key={item.id} className="flex items-center justify-between py-1.5 text-sm first:pt-0 last:pb-0">
+            <Link href={`/itens/${item.id}`} className="font-medium text-foreground hover:underline">
               {item.name}
             </Link>
-            <span className="text-muted">
+            <span className="tabular-nums text-muted">
               {formatQuantity(item.quantity, item.unit)} / mín. {formatQuantity(item.min_stock, item.unit)}
             </span>
           </li>

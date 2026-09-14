@@ -64,6 +64,20 @@ create index if not exists idx_items_active on items(active);
 create index if not exists idx_items_category on items(category);
 create index if not exists idx_items_sku on items(sku);
 
+-- Trava de verdade contra estoque negativo — sem isso, uma saída/ajuste maior
+-- que o estoque disponível passava direto e deixava quantity negativo, sem
+-- nenhum aviso. `not valid` pra não quebrar caso já exista alguma linha
+-- negativa em produção hoje (não valida retroativo, mas passa a barrar TODA
+-- alteração nova, de qualquer caminho: web, Telegram, o que vier).
+do $$
+begin
+  alter table items
+    add constraint items_quantity_not_negative
+    check (quantity >= 0) not valid;
+exception
+  when duplicate_object then null;
+end $$;
+
 alter table items alter column created_by set default auth.uid();
 
 -- ============================================================
@@ -102,6 +116,29 @@ create table if not exists movements (
 create index if not exists idx_movements_item_id on movements(item_id);
 create index if not exists idx_movements_created_at on movements(created_at);
 create index if not exists idx_movements_type_created_at on movements(type, created_at);
+
+-- Colunas de cartão de crédito — existem em produção por fora deste
+-- schema.sql (drift, igual o `username` de employees). Registradas aqui via
+-- ALTER (idempotente) pra o arquivo continuar reproduzível do zero.
+-- fee_value/net_value: a fórmula abaixo foi inferida a partir de linhas reais
+-- (fee_value=0 quando fee_percent é nulo, net_value = total_value - fee_value)
+-- — não confirmada via information_schema. Não afeta o banco atual (a coluna
+-- já existe lá, então o ALTER só roda, com essa fórmula, num projeto novo).
+alter table movements add column if not exists card_brand text;
+alter table movements add column if not exists discount_value numeric(12,2);
+alter table movements add column if not exists fee_percent numeric(5,2);
+alter table movements add column if not exists fee_value numeric(12,2) not null default 0;
+alter table movements add column if not exists net_value numeric(12,2)
+  generated always as (total_value - coalesce(fee_value, 0)) stored;
+
+do $$
+begin
+  alter table movements
+    add constraint cartao_requires_card_brand
+    check (payment_method <> 'cartao' or card_brand is not null);
+exception
+  when duplicate_object then null;
+end $$;
 
 -- View auxiliar para relatórios/agregações (mês a mês, por tipo/item)
 create or replace view monthly_movement_summary as
@@ -144,11 +181,21 @@ create trigger trg_apply_movement
 -- ============================================================
 -- TRIGGER: cria a linha em employees automaticamente no signup
 -- ============================================================
+-- NOTA: a tabela employees em produção tem uma coluna `username` (not null,
+-- sem default) que não existe neste schema.sql original — foi adicionada
+-- manualmente por fora (drift). O insert abaixo já preenche ela; se você
+-- rodar esse schema.sql num projeto novo sem essa coluna, o `insert` falha
+-- porque `username` não existe — nesse caso apague a linha `username, ...`
+-- e o valor correspondente abaixo.
 create or replace function handle_new_user()
 returns trigger as $$
 begin
-  insert into employees (id, full_name, role)
-  values (new.id, coalesce(new.raw_user_meta_data->>'full_name', new.email), 'staff')
+  insert into employees (id, username, full_name)
+  values (
+    new.id,
+    split_part(new.email, '@', 1) || '-' || substr(new.id::text, 1, 8),
+    coalesce(new.raw_user_meta_data->>'full_name', new.email)
+  )
   on conflict (id) do nothing;
   return new;
 end;
@@ -167,6 +214,22 @@ alter table items enable row level security;
 alter table movements enable row level security;
 alter table suppliers enable row level security;
 
+-- Checa "é admin" por fora do RLS (security definer bypassa RLS dentro da
+-- função). Necessário porque uma policy em `employees` que consulta a
+-- própria `employees` causa "infinite recursion detected in policy for
+-- relation employees" (42P17) assim que ela vale também pra SELECT (for all).
+create or replace function is_admin()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (
+    select 1 from employees where id = auth.uid() and role = 'admin'
+  );
+$$;
+
 -- employees: qualquer funcionário autenticado lê o roster (exibir "quem fez" nas
 -- movimentações); só admin escreve (tela de provisionamento).
 drop policy if exists employees_select_all on employees;
@@ -175,9 +238,7 @@ create policy employees_select_all on employees
 
 drop policy if exists employees_admin_write on employees;
 create policy employees_admin_write on employees
-  for all using (
-    exists (select 1 from employees e where e.id = auth.uid() and e.role = 'admin')
-  );
+  for all using (is_admin());
 
 -- items: leitura livre para autenticados; insert/update livres (created_by nunca
 -- confiado do client — default auth.uid() + with check); delete só admin.
@@ -195,9 +256,7 @@ create policy items_update_auth on items
 
 drop policy if exists items_delete_admin on items;
 create policy items_delete_admin on items
-  for delete using (
-    exists (select 1 from employees e where e.id = auth.uid() and e.role = 'admin')
-  );
+  for delete using (is_admin());
 
 -- movements: ledger imutável — só select/insert têm policy (update/delete ficam
 -- default-deny, sem policy nenhuma).

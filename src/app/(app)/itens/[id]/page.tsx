@@ -6,6 +6,8 @@ import { MovementsTable } from "@/components/movements/MovementsTable";
 import { updateItem } from "../actions";
 import type { Item, MovementWithRelations, Supplier } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export default async function ItemDetailPage({
   params,
 }: {
@@ -14,7 +16,11 @@ export default async function ItemDetailPage({
   const { id } = await params;
   const supabase = await createClient();
 
-  const [{ data: item }, { data: suppliers }, { data: movements }] = await Promise.all([
+  const [
+    { data: item, error: itemError },
+    { data: suppliers, error: suppliersError },
+    { data: movements, error: movementsError },
+  ] = await Promise.all([
     supabase.from("items").select("*").eq("id", id).single(),
     supabase.from("suppliers").select("*").order("name"),
     supabase
@@ -24,6 +30,19 @@ export default async function ItemDetailPage({
       .order("created_at", { ascending: false })
       .limit(50),
   ]);
+
+  if (itemError)
+    console.error(
+      `[itens/${id}] erro ao buscar item: code=${itemError.code} message=${itemError.message} details=${itemError.details} hint=${itemError.hint}`
+    );
+  if (suppliersError)
+    console.error(
+      `[itens/${id}] erro ao buscar suppliers: code=${suppliersError.code} message=${suppliersError.message}`
+    );
+  if (movementsError)
+    console.error(
+      `[itens/${id}] erro ao buscar movements: code=${movementsError.code} message=${movementsError.message} details=${movementsError.details} hint=${movementsError.hint}`
+    );
 
   if (!item) {
     notFound();

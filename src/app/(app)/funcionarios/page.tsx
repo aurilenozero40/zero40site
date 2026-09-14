@@ -5,26 +5,37 @@ import { createClient } from "@/lib/supabase/server";
 import type { Employee } from "@/lib/types";
 import { updateTelegramChatId, toggleEmployeeActive } from "./actions";
 
+export const dynamic = "force-dynamic";
+
 export default async function FuncionariosPage() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
+  if (!user) {
+    redirect("/login");
+  }
+
   const { data: caller } = await supabase
     .from("employees")
     .select("role")
-    .eq("id", user!.id)
+    .eq("id", user.id)
     .single();
 
   if (caller?.role !== "admin") {
     redirect("/dashboard");
   }
 
-  const { data: employees } = await supabase
+  const { data: employees, error } = await supabase
     .from("employees")
     .select("*")
     .order("full_name");
+
+  if (error)
+    console.error(
+      `[funcionarios] erro ao buscar employees: code=${error.code} message=${error.message} details=${error.details} hint=${error.hint}`
+    );
 
   return (
     <div className="flex flex-col gap-6">

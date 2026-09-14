@@ -3,6 +3,8 @@ import { MovementForm } from "@/components/movements/MovementForm";
 import { createMovement } from "../actions";
 import type { Item } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export default async function NovaMovimentacaoPage({
   searchParams,
 }: {
@@ -10,11 +12,16 @@ export default async function NovaMovimentacaoPage({
 }) {
   const { item } = await searchParams;
   const supabase = await createClient();
-  const { data: items } = await supabase
+  const { data: items, error } = await supabase
     .from("items")
     .select("*")
     .eq("active", true)
     .order("name");
+
+  if (error)
+    console.error(
+      `[movimentacoes/nova] erro ao buscar items: code=${error.code} message=${error.message} details=${error.details} hint=${error.hint}`
+    );
 
   return (
     <div className="flex max-w-2xl flex-col gap-6">

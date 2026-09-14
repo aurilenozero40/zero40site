@@ -92,6 +92,21 @@ export async function POST(request: NextRequest) {
       source_channel: "telegram" as const,
     };
 
+    // Mesma trava de estoque do formulário web — confere ANTES de tentar
+    // inserir (o banco também tem a constraint items_quantity_not_negative
+    // como rede de segurança final).
+    const isStockDecrease =
+      parsed.command.kind === "saida" ||
+      (parsed.command.kind === "ajuste" && !parsed.command.increases);
+
+    if (isStockDecrease && item.quantity - parsed.command.quantity < 0) {
+      await sendMessage(
+        chatId,
+        `Estoque insuficiente: ${item.name} tem só ${formatQuantity(item.quantity, item.unit)} disponível.`
+      );
+      return NextResponse.json({ ok: true });
+    }
+
     let insertError: string | null = null;
 
     if (parsed.command.kind === "entrada" || parsed.command.kind === "saida") {
@@ -115,7 +130,10 @@ export async function POST(request: NextRequest) {
     }
 
     if (insertError) {
-      await sendMessage(chatId, `Erro ao registrar movimentação: ${insertError}`);
+      const friendly = insertError.includes("items_quantity_not_negative")
+        ? `Estoque insuficiente pra essa movimentação de ${item.name}.`
+        : `Erro ao registrar movimentação: ${insertError}`;
+      await sendMessage(chatId, friendly);
       return NextResponse.json({ ok: true });
     }
 

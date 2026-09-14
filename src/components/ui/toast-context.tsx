@@ -51,7 +51,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               "flex items-start gap-2 rounded-md border p-4 shadow-lg data-[state=open]:animate-in data-[state=closed]:animate-out",
               t.variant === "destructive"
                 ? "border-danger/30 bg-danger/10 text-danger"
-                : "border-border bg-background text-foreground"
+                : "border-border bg-surface text-foreground"
             )}
           >
             {t.variant === "destructive" && <AlertTriangle size={18} className="mt-0.5 shrink-0" />}

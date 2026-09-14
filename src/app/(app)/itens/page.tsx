@@ -4,12 +4,19 @@ import { createClient } from "@/lib/supabase/server";
 import { ItemsTable } from "@/components/items/ItemsTable";
 import type { Item } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export default async function ItensPage() {
   const supabase = await createClient();
-  const { data: items } = await supabase
+  const { data: items, error } = await supabase
     .from("items")
     .select("*")
     .order("name");
+
+  if (error)
+    console.error(
+      `[itens] erro ao buscar items: code=${error.code} message=${error.message} details=${error.details} hint=${error.hint}`
+    );
 
   return (
     <div className="flex flex-col gap-6">

@@ -8,10 +8,14 @@ export default async function NovoFuncionarioPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
+  if (!user) {
+    redirect("/login");
+  }
+
   const { data: caller } = await supabase
     .from("employees")
     .select("role")
-    .eq("id", user!.id)
+    .eq("id", user.id)
     .single();
 
   if (caller?.role !== "admin") {

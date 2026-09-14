@@ -57,7 +57,10 @@ export async function updateItem(
   }
 
   const supabase = await createClient();
-  const { error } = await supabase.from("items").update(parsed.data).eq("id", itemId);
+  const { error } = await supabase
+    .from("items")
+    .update({ ...parsed.data, updated_at: new Date().toISOString() })
+    .eq("id", itemId);
 
   if (error) {
     return { error: error.message };

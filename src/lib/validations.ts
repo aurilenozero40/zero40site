@@ -49,6 +49,9 @@ export const movementSchema = z.discriminatedUnion("type", [
     unit_value: optionalNumber,
     payment_method: z.enum(["a_vista", "pix", "cartao"]).nullable().optional(),
     installments: z.coerce.number().int().min(1).nullable().optional(),
+    card_brand: optionalText,
+    fee_percent: optionalNumber,
+    fee_value: optionalNumber,
     reason: optionalText,
   }),
   z.object({

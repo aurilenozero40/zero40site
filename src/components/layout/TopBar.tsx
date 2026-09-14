@@ -24,13 +24,18 @@ export function TopBar({ fullName, isAdmin }: { fullName: string; isAdmin: boole
       <div className="flex items-center justify-between px-4 py-3 md:px-6">
         <Logo size="sm" className="md:hidden" />
         <div className="ml-auto flex items-center gap-3">
-          <span className="text-sm text-muted">{fullName}</span>
+          <div className="flex items-center gap-2">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent to-accent-alt text-xs font-semibold text-accent-foreground">
+              {fullName.trim().charAt(0).toUpperCase()}
+            </div>
+            <span className="hidden text-sm text-muted sm:inline">{fullName}</span>
+          </div>
           <button
             onClick={handleLogout}
             className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-muted transition-colors hover:bg-surface hover:text-foreground"
           >
             <LogOut size={16} />
-            Sair
+            <span className="hidden sm:inline">Sair</span>
           </button>
         </div>
       </div>

@@ -8,6 +8,8 @@ import { currentMonthParam, getMonthRange, groupByDay, summarizeMovements } from
 import { formatCurrency, formatQuantity } from "@/lib/utils";
 import type { MovementWithRelations } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export default async function RelatorioSaidasPage({
   searchParams,
 }: {
@@ -18,13 +20,18 @@ export default async function RelatorioSaidasPage({
   const { start, end } = getMonthRange(month);
 
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("movements")
     .select("*, items(id, name, sku, unit), employees(id, full_name)")
     .eq("type", "saida")
     .gte("created_at", start)
     .lt("created_at", end)
     .order("created_at", { ascending: false });
+
+  if (error)
+    console.error(
+      `[relatorios/saidas] erro ao buscar movements: code=${error.code} message=${error.message} details=${error.details} hint=${error.hint}`
+    );
 
   const movements = (data as MovementWithRelations[]) ?? [];
   const summary = summarizeMovements(movements);

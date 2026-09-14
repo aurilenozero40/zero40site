@@ -14,6 +14,12 @@
   --success: #16a34a;
   --warning: #f59e0b;
   --danger: #dc2626;
+
+  /* Sidebar tem cor fixa (não inverte com o tema) — é o "chrome" da marca,
+     igual em claro e escuro, pra nunca ficar clara num fundo escuro. */
+  --sidebar: #0b1220;
+  --sidebar-foreground: #e7ebf3;
+  --sidebar-border: #1c2536;
 }
 
 @theme inline {
@@ -31,17 +37,24 @@
   --color-warning: var(--warning);
   --color-danger: var(--danger);
 
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --surface: #171717;
-    --border-color: #262626;
-    --muted: #a3a3a3;
+    --background: #08090b;
+    --foreground: #f2f3f5;
+    /* Precisa ser bem distinta do --background — é o que dá "elevação" aos
+       cards. Antes as duas cores eram quase idênticas e todo card sumia
+       dentro do fundo, ficando tudo achatado/sem hierarquia. */
+    --surface: #1a1e26;
+    --border-color: #2c3240;
+    --muted: #8a93a3;
   }
 }
 
@@ -61,15 +74,21 @@ body {
   }
 
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold text-accent-foreground bg-gradient-to-r from-accent to-accent-alt shadow-sm transition-opacity hover:opacity-90 disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold text-accent-foreground bg-gradient-to-r from-accent to-accent-alt shadow-sm shadow-accent/20 transition-all hover:opacity-90 hover:shadow-md hover:shadow-accent/30 disabled:opacity-50 disabled:pointer-events-none;
   }
 
   .btn-secondary {
-    @apply inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-accent/40 disabled:opacity-50 disabled:pointer-events-none;
   }
 
+  /* Cards ficam "elevados" (bg-surface) sobre o fundo da página
+     (bg-background) — é isso que separa visualmente cada bloco. */
   .card {
-    @apply rounded-lg border border-border bg-background p-4;
+    @apply rounded-xl border border-border bg-surface p-4 shadow-sm shadow-black/20 transition-colors;
+  }
+
+  .card-hover {
+    @apply hover:border-accent/40 hover:shadow-md hover:shadow-black/30;
   }
 
   .badge-low-stock {

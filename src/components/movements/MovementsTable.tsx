@@ -1,3 +1,4 @@
+import { Inbox } from "lucide-react";
 import type { MovementWithRelations } from "@/lib/types";
 import { formatCurrency, formatDate, formatQuantity } from "@/lib/utils";
 
@@ -30,7 +31,7 @@ export function MovementsTable({
     <div className="card overflow-x-auto p-0">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-border text-left text-xs uppercase text-muted">
+          <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">
             {showItem && <th className="px-4 py-3">Item</th>}
             <th className="px-4 py-3">Tipo</th>
             <th className="px-4 py-3">Quantidade</th>
@@ -43,7 +44,7 @@ export function MovementsTable({
         </thead>
         <tbody>
           {movements.map((m) => (
-            <tr key={m.id} className="border-b border-border last:border-0">
+            <tr key={m.id} className="border-b border-border last:border-0 transition-colors hover:bg-foreground/[0.04]">
               {showItem && (
                 <td className="px-4 py-3 font-medium text-foreground">
                   {m.items?.name ?? "-"}
@@ -57,8 +58,10 @@ export function MovementsTable({
                   {m.subtype ? ` · ${m.subtype}` : ""}
                 </span>
               </td>
-              <td className="px-4 py-3">{formatQuantity(m.quantity, m.items?.unit)}</td>
-              <td className="px-4 py-3">{formatCurrency(m.total_value)}</td>
+              <td className="px-4 py-3 tabular-nums">{formatQuantity(m.quantity, m.items?.unit)}</td>
+              <td className="px-4 py-3 font-medium tabular-nums text-foreground">
+                {formatCurrency(m.total_value)}
+              </td>
               <td className="px-4 py-3 text-muted">
                 {m.payment_method
                   ? `${PAYMENT_LABEL[m.payment_method]}${
@@ -73,8 +76,11 @@ export function MovementsTable({
           ))}
           {movements.length === 0 && (
             <tr>
-              <td colSpan={showItem ? 8 : 7} className="px-4 py-8 text-center text-muted">
-                Nenhuma movimentação encontrada.
+              <td colSpan={showItem ? 8 : 7} className="px-4 py-12 text-center">
+                <div className="flex flex-col items-center gap-2 text-muted">
+                  <Inbox size={24} className="opacity-50" />
+                  <span className="text-sm">Nenhuma movimentação encontrada.</span>
+                </div>
               </td>
             </tr>
           )}

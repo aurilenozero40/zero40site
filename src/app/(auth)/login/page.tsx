@@ -4,6 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
+// Login sem senha (./actions.ts + ./passwordless.ts) fica desativado por
+// enquanto — havia uma divergência entre o schema.sql do repo e a tabela
+// employees em produção (coluna username obrigatória, default de role
+// diferente do usado no código) que precisa ser resolvida antes de religar.
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");

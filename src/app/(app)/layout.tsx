@@ -29,7 +29,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <Sidebar isAdmin={isAdmin} />
         <div className="flex flex-1 flex-col">
           <TopBar fullName={employee?.full_name ?? user.email ?? "Funcionário"} isAdmin={isAdmin} />
-          <main className="flex-1 overflow-y-auto bg-surface p-4 md:p-6">{children}</main>
+          <main className="flex-1 overflow-y-auto bg-background p-4 md:p-6">{children}</main>
         </div>
       </div>
     </ToastProvider>

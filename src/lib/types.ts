@@ -65,6 +65,11 @@ export type Movement = {
   total_value: number | null;
   payment_method: PaymentMethod | null;
   installments: number | null;
+  card_brand: string | null;
+  discount_value: number | null;
+  fee_percent: number | null;
+  fee_value: number;
+  net_value: number | null;
   adjustment_increases_stock: boolean | null;
   reason: string | null;
   source_channel: "web" | "telegram";
