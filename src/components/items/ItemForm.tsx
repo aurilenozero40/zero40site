@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
+import { isValidGtin } from "@/lib/barcode";
 import type { Item, Supplier } from "@/lib/types";
 import type { ActionState } from "@/app/(app)/itens/actions";
 
@@ -16,6 +17,16 @@ export function ItemForm({
   suppliers: Supplier[];
 }) {
   const [state, formAction, pending] = useActionState<ActionState, FormData>(action, null);
+  const [barcode, setBarcode] = useState(item?.barcode ?? "");
+
+  // Só avisa (não bloqueia): códigos internos/alfanuméricos são válidos, mas um
+  // código numérico de 8/12/13/14 dígitos com verificador errado é quase
+  // sempre erro de digitação.
+  const trimmedBarcode = barcode.trim();
+  const barcodeLooksMistyped =
+    /^\d+$/.test(trimmedBarcode) &&
+    [8, 12, 13, 14].includes(trimmedBarcode.length) &&
+    !isValidGtin(trimmedBarcode);
 
   return (
     <form action={formAction} className="flex flex-col gap-6">
@@ -41,9 +52,18 @@ export function ItemForm({
           <input
             id="barcode"
             name="barcode"
-            className="input"
-            defaultValue={item?.barcode ?? ""}
+            inputMode="numeric"
+            autoComplete="off"
+            className="input font-mono"
+            value={barcode}
+            onChange={(e) => setBarcode(e.target.value)}
           />
+          {barcodeLooksMistyped && (
+            <p className="mt-1 text-xs text-warning">
+              O dígito verificador desse código não confere — pode ter erro de digitação. Confira
+              com a etiqueta do produto.
+            </p>
+          )}
         </div>
 
         <div>
@@ -94,6 +114,20 @@ export function ItemForm({
             ))}
           </select>
         </div>
+      </div>
+
+      <div className="card">
+        <label className="label" htmlFor="description">
+          Descrição
+        </label>
+        <textarea
+          id="description"
+          name="description"
+          rows={3}
+          className="input"
+          defaultValue={item?.description ?? ""}
+          placeholder="Detalhes do produto (cor, tamanho, garantia...)"
+        />
       </div>
 
       <div className="card grid grid-cols-1 gap-4 sm:grid-cols-2">

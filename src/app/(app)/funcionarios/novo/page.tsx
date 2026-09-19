@@ -1,26 +1,10 @@
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { requireAdmin } from "@/lib/auth/session";
 import { NewEmployeeForm } from "@/components/employees/NewEmployeeForm";
 
+export const dynamic = "force-dynamic";
+
 export default async function NovoFuncionarioPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { data: caller } = await supabase
-    .from("employees")
-    .select("role")
-    .eq("id", user.id)
-    .single();
-
-  if (caller?.role !== "admin") {
-    redirect("/dashboard");
-  }
+  await requireAdmin();
 
   return (
     <div className="flex max-w-md flex-col gap-6">

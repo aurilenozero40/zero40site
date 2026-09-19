@@ -4,11 +4,12 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { navLinks } from "./Sidebar";
+import { isNavActive, navFor } from "@/lib/nav";
+import { ROLE_LABEL, isRole } from "@/lib/roles";
 import { Logo } from "./Logo";
 import { cn } from "@/lib/utils";
 
-export function TopBar({ fullName, isAdmin }: { fullName: string; isAdmin: boolean }) {
+export function TopBar({ fullName, role }: { fullName: string; role: string }) {
   const router = useRouter();
   const pathname = usePathname();
 
@@ -28,7 +29,10 @@ export function TopBar({ fullName, isAdmin }: { fullName: string; isAdmin: boole
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent to-accent-alt text-xs font-semibold text-accent-foreground">
               {fullName.trim().charAt(0).toUpperCase()}
             </div>
-            <span className="hidden text-sm text-muted sm:inline">{fullName}</span>
+            <div className="hidden leading-tight sm:block">
+              <p className="text-sm text-foreground">{fullName}</p>
+              <p className="text-[11px] text-muted">{isRole(role) ? ROLE_LABEL[role] : role}</p>
+            </div>
           </div>
           <button
             onClick={handleLogout}
@@ -40,25 +44,20 @@ export function TopBar({ fullName, isAdmin }: { fullName: string; isAdmin: boole
         </div>
       </div>
       <nav className="flex gap-1 overflow-x-auto px-3 pb-2 md:hidden">
-        {navLinks
-          .concat(isAdmin ? [{ href: "/funcionarios", label: "Funcionários", icon: navLinks[0].icon }] : [])
-          .map(({ href, label }) => {
-            const active = pathname === href || pathname.startsWith(href + "/");
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={cn(
-                  "shrink-0 rounded-md px-3 py-1.5 text-xs font-medium",
-                  active
-                    ? "bg-gradient-to-r from-accent to-accent-alt text-accent-foreground"
-                    : "bg-surface text-muted"
-                )}
-              >
-                {label}
-              </Link>
-            );
-          })}
+        {navFor(role).map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={cn(
+              "shrink-0 rounded-md px-3 py-1.5 text-xs font-medium",
+              item.primary || isNavActive(item, pathname)
+                ? "bg-gradient-to-r from-accent to-accent-alt text-accent-foreground"
+                : "bg-surface text-muted"
+            )}
+          >
+            {item.label}
+          </Link>
+        ))}
       </nav>
     </header>
   );

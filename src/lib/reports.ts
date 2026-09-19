@@ -1,18 +1,17 @@
+import { monthRange, todayParts } from "./dates";
+
+/** "YYYY-MM" do mês atual NO FUSO DA LOJA (o servidor roda em UTC). */
 export function currentMonthParam() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const { year, month } = todayParts();
+  return `${year}-${String(month).padStart(2, "0")}`;
 }
 
+/** Limites do mês como instantes ISO (meia-noite de Brasília), prontos para .gte/.lt. */
 export function getMonthRange(monthParam: string) {
-  const [yearStr, monthStr] = monthParam.split("-");
-  const year = Number(yearStr);
-  const month = Number(monthStr); // 1-12
-
-  const start = `${yearStr}-${monthStr}-01`;
-  const endDate = new Date(year, month, 1); // primeiro dia do mês seguinte
-  const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-01`;
-
-  return { start, end, year, month };
+  const valid = /^\d{4}-(0[1-9]|1[0-2])$/.test(monthParam) ? monthParam : currentMonthParam();
+  const { from, to } = monthRange(valid);
+  const [year, month] = valid.split("-").map(Number);
+  return { start: from.toISOString(), end: to.toISOString(), year, month };
 }
 
 export function summarizeMovements<
@@ -37,13 +36,15 @@ export function summarizeMovements<
   };
 }
 
+/** Agrupa por dia NO FUSO DA LOJA (e não por dia UTC). */
 export function groupByDay<T extends { created_at: string; quantity: number; total_value: number | null }>(
   rows: T[]
 ) {
   const byDay = new Map<string, { day: string; quantity: number; value: number }>();
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" });
 
   for (const row of rows) {
-    const day = row.created_at.slice(0, 10);
+    const day = fmt.format(new Date(row.created_at)); // YYYY-MM-DD
     const existing = byDay.get(day) ?? { day, quantity: 0, value: 0 };
     existing.quantity += row.quantity;
     existing.value += row.total_value ?? 0;

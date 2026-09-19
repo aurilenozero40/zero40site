@@ -2,8 +2,9 @@
 
 import { useActionState, useMemo, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
-import { cn, formatCurrency, formatQuantity } from "@/lib/utils";
-import { CARD_BRANDS, CREDIT_INSTALLMENTS, getCardFeeRate } from "@/lib/cardFees";
+import { ScanBarcode } from "lucide-react";
+import { cn, formatQuantity } from "@/lib/utils";
+import { normalizeBarcode } from "@/lib/barcode";
 import type { Item } from "@/lib/types";
 import type { ActionState } from "@/app/(app)/movimentacoes/actions";
 
@@ -11,19 +12,15 @@ const ENTRADA_SUBTYPES = [
   { value: "compra", label: "Compra" },
   { value: "devolucao", label: "Devolução" },
   { value: "transferencia", label: "Transferência" },
+  { value: "outros", label: "Outros" },
 ];
 
+// Venda NÃO está aqui de propósito: toda venda nasce no PDV (Nova venda), com cliente, pagamento e auditoria.
 const SAIDA_SUBTYPES = [
-  { value: "uso", label: "Uso" },
-  { value: "perda", label: "Perda" },
-  { value: "venda", label: "Venda" },
+  { value: "perda", label: "Perda (quebra, vencimento, sumiço)" },
+  { value: "uso", label: "Uso interno" },
   { value: "emprestimo", label: "Empréstimo" },
-];
-
-const PAYMENT_METHODS = [
-  { value: "a_vista", label: "À vista" },
-  { value: "pix", label: "Pix" },
-  { value: "cartao", label: "Cartão" },
+  { value: "outros", label: "Outros" },
 ];
 
 export function MovementForm({
@@ -38,25 +35,18 @@ export function MovementForm({
   const [state, formAction, pending] = useActionState<ActionState, FormData>(action, null);
   const [type, setType] = useState<"entrada" | "saida" | "ajuste">("entrada");
   const [itemId, setItemId] = useState(defaultItemId ?? "");
-  const [saidaSubtype, setSaidaSubtype] = useState("venda");
-  const [paymentMethod, setPaymentMethod] = useState("");
-
-  // Calculadora de taxa de cartão — só usada quando paymentMethod === "cartao".
-  // NUNCA chutar valor default aqui (nem "1") — quantidade/valor ficam vazios
-  // até o funcionário preencher de verdade; dado real, não inventado.
+  const [saidaSubtype, setSaidaSubtype] = useState("perda");
   const [saidaQuantity, setSaidaQuantity] = useState("");
-  const [saidaUnitValue, setSaidaUnitValue] = useState("");
-  const [cardBrand, setCardBrand] = useState("");
-  const [cardMode, setCardMode] = useState<"debito" | "credito">("credito");
-  const [installments, setInstallments] = useState(1);
   const [ajusteQuantity, setAjusteQuantity] = useState("");
   const [ajusteDirection, setAjusteDirection] = useState<"aumenta" | "diminui">("diminui");
 
+  // Leitor de código de barras: o leitor digita o código + Enter.
+  const [barcodeInput, setBarcodeInput] = useState("");
+  const [scanStatus, setScanStatus] = useState<{ ok: boolean; message: string } | null>(null);
+
   const selectedItem = useMemo(() => items.find((i) => i.id === itemId), [items, itemId]);
 
-  // Aviso em tempo real — o item já vem com a quantidade em estoque no
-  // carregamento da página; a trava de verdade (contra corrida entre duas
-  // pessoas vendendo/ajustando ao mesmo tempo) é no servidor + no banco.
+  // Aviso em tempo real; a trava de verdade (corrida entre duas pessoas) é no servidor + no banco.
   const saidaExceedsStock =
     !!selectedItem && saidaQuantity.trim() !== "" && Number(saidaQuantity) > selectedItem.quantity;
   const ajusteExceedsStock =
@@ -65,18 +55,70 @@ export function MovementForm({
     ajusteQuantity.trim() !== "" &&
     Number(ajusteQuantity) > selectedItem.quantity;
 
-  const cardTotalValue = (Number(saidaQuantity) || 0) * (Number(saidaUnitValue) || 0);
-  const cardHasRealTotal = saidaQuantity.trim() !== "" && saidaUnitValue.trim() !== "" && cardTotalValue > 0;
-  const cardFeeRate = cardBrand
-    ? getCardFeeRate(cardBrand, cardMode === "debito", installments)
-    : null;
-  const cardFeeValue = cardFeeRate !== null ? (cardTotalValue * cardFeeRate) / 100 : 0;
-  const cardNetValue = cardTotalValue - cardFeeValue;
-  const cardBlocked = paymentMethod === "cartao" && !!cardBrand && cardFeeRate === null;
+  function handleBarcodeScan() {
+    const normalized = normalizeBarcode(barcodeInput);
+    if (!normalized) return;
+
+    const found = items.find((i) => normalizeBarcode(i.barcode) === normalized);
+    if (!found) {
+      setScanStatus({
+        ok: false,
+        message: `Nenhum item ativo com o código ${barcodeInput.trim()}. Confira o código ou cadastre o item.`,
+      });
+      return;
+    }
+
+    setItemId(found.id);
+    setScanStatus({ ok: true, message: `${found.name} selecionado.` });
+    setBarcodeInput("");
+    // Já leva o cursor pra quantidade da aba aberta — fluxo de bipar e digitar.
+    document.getElementById(`${type}_quantity`)?.focus();
+  }
 
   return (
     <form action={formAction} className="flex flex-col gap-6">
       <div className="card flex flex-col gap-2">
+        <div className="mb-2 flex flex-col gap-1">
+          <label className="label mb-0" htmlFor="barcode_scan">
+            Código de barras
+          </label>
+          <div className="relative">
+            <ScanBarcode
+              size={16}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+            />
+            <input
+              id="barcode_scan"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              autoFocus={!defaultItemId}
+              placeholder="Bipe o código ou digite e aperte Enter"
+              className="input pl-9"
+              value={barcodeInput}
+              onChange={(e) => {
+                setBarcodeInput(e.target.value);
+                setScanStatus(null);
+              }}
+              onKeyDown={(e) => {
+                // Enter do leitor não pode enviar o formulário.
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleBarcodeScan();
+                }
+              }}
+            />
+          </div>
+          {scanStatus && (
+            <p
+              role="status"
+              className={cn("text-xs font-medium", scanStatus.ok ? "text-success" : "text-danger")}
+            >
+              {scanStatus.message}
+            </p>
+          )}
+        </div>
+
         <label className="label" htmlFor="item_id">
           Item *
         </label>
@@ -122,7 +164,7 @@ export function MovementForm({
                   : "text-muted hover:text-foreground"
               )}
             >
-              {t}
+              {t === "saida" ? "Saída" : t}
             </Tabs.Trigger>
           ))}
         </Tabs.List>
@@ -179,6 +221,9 @@ export function MovementForm({
         </Tabs.Content>
 
         <Tabs.Content value="saida" className="flex flex-col gap-4">
+          <p className="rounded-md bg-background px-3 py-2 text-xs text-muted">
+            Para <strong>vender</strong>, use <strong>Nova venda</strong> — é lá que ficam cliente, pagamento e o aviso ao CEO.
+          </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="label" htmlFor="saida_subtype">
@@ -215,21 +260,6 @@ export function MovementForm({
                 onChange={(e) => setSaidaQuantity(e.target.value)}
               />
             </div>
-            <div>
-              <label className="label" htmlFor="saida_unit_value">
-                Valor de saída (R$/un)
-              </label>
-              <input
-                id="saida_unit_value"
-                name="unit_value"
-                type="number"
-                step="0.01"
-                min="0"
-                className="input"
-                value={saidaUnitValue}
-                onChange={(e) => setSaidaUnitValue(e.target.value)}
-              />
-            </div>
           </div>
 
           {selectedItem && saidaExceedsStock && (
@@ -237,141 +267,6 @@ export function MovementForm({
               Estoque insuficiente: só tem {formatQuantity(selectedItem.quantity, selectedItem.unit)}{" "}
               disponível.
             </p>
-          )}
-
-          {saidaSubtype === "venda" && (
-            <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="label" htmlFor="payment_method">
-                    Forma de pagamento
-                  </label>
-                  <select
-                    id="payment_method"
-                    name="payment_method"
-                    className="input"
-                    value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value)}
-                  >
-                    <option value="">-</option>
-                    {PAYMENT_METHODS.map((p) => (
-                      <option key={p.value} value={p.value}>
-                        {p.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {paymentMethod === "cartao" && (
-                  <div>
-                    <label className="label" htmlFor="card_brand">
-                      Bandeira do cartão *
-                    </label>
-                    <select
-                      id="card_brand"
-                      name="card_brand"
-                      required
-                      className="input"
-                      value={cardBrand}
-                      onChange={(e) => setCardBrand(e.target.value)}
-                    >
-                      <option value="" disabled>
-                        Selecione...
-                      </option>
-                      {CARD_BRANDS.map((b) => (
-                        <option key={b.value} value={b.value}>
-                          {b.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              {paymentMethod === "cartao" && (
-                <div className="flex flex-col gap-4 rounded-lg border border-border bg-background p-4">
-                  <div className="flex gap-1 rounded-md bg-surface p-1 w-fit">
-                    {(["debito", "credito"] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => setCardMode(mode)}
-                        className={cn(
-                          "rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors",
-                          cardMode === mode
-                            ? "bg-background text-foreground shadow-sm"
-                            : "text-muted hover:text-foreground"
-                        )}
-                      >
-                        {mode === "debito" ? "Débito" : "Crédito"}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* installments manda pro banco 1 mesmo no débito — o
-                      banco não distingue débito/crédito, só guarda parcela;
-                      quem carrega essa diferença é fee_percent/fee_value. */}
-                  <input type="hidden" name="installments" value={cardMode === "debito" ? 1 : installments} />
-
-                  {cardMode === "credito" && (
-                    <div className="max-w-[160px]">
-                      <label className="label" htmlFor="installments_select">
-                        Parcelas
-                      </label>
-                      <select
-                        id="installments_select"
-                        className="input"
-                        value={installments}
-                        onChange={(e) => setInstallments(Number(e.target.value))}
-                      >
-                        {CREDIT_INSTALLMENTS.map((n) => (
-                          <option key={n} value={n}>
-                            {n}x
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  <input type="hidden" name="fee_percent" value={cardFeeRate ?? ""} />
-                  <input type="hidden" name="fee_value" value={cardFeeValue.toFixed(2)} />
-
-                  {cardBrand && cardFeeRate === null && (
-                    <p className="text-xs text-warning">
-                      Essa bandeira não tem taxa de débito cadastrada — escolha &quot;Crédito&quot; ou outra bandeira.
-                    </p>
-                  )}
-
-                  {cardBrand && cardFeeRate !== null && !cardHasRealTotal && (
-                    <p className="text-xs text-muted">
-                      Preencha quantidade e valor de saída pra calcular a taxa.
-                    </p>
-                  )}
-
-                  {cardBrand && cardFeeRate !== null && cardHasRealTotal && (
-                    <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                      <div>
-                        <p className="text-xs uppercase tracking-wide text-muted">Total da venda</p>
-                        <p className="font-medium text-foreground">{formatCurrency(cardTotalValue)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs uppercase tracking-wide text-muted">Taxa</p>
-                        <p className="font-medium text-foreground">
-                          {cardFeeRate.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-xs uppercase tracking-wide text-muted">Valor da taxa</p>
-                        <p className="font-medium text-danger">{formatCurrency(cardFeeValue)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs uppercase tracking-wide text-muted">Você recebe</p>
-                        <p className="font-semibold text-success">{formatCurrency(cardNetValue)}</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
           )}
 
           <div>
@@ -453,12 +348,7 @@ export function MovementForm({
         <button
           type="submit"
           className="btn-primary"
-          disabled={
-            pending ||
-            cardBlocked ||
-            (type === "saida" && saidaExceedsStock) ||
-            (type === "ajuste" && ajusteExceedsStock)
-          }
+          disabled={pending || (type === "saida" && saidaExceedsStock) || (type === "ajuste" && ajusteExceedsStock)}
         >
           {pending ? "Salvando..." : "Registrar movimentação"}
         </button>

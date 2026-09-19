@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ROLES, ROLE_LABEL, isRole, type Role } from "@/lib/roles";
 
 export function NewEmployeeForm() {
   const router = useRouter();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"staff" | "admin">("staff");
+  const [role, setRole] = useState<Role>("vendedor");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -86,10 +87,13 @@ export function NewEmployeeForm() {
           id="role"
           className="input"
           value={role}
-          onChange={(e) => setRole(e.target.value as "staff" | "admin")}
+          onChange={(e) => isRole(e.target.value) && setRole(e.target.value)}
         >
-          <option value="staff">Funcionário</option>
-          <option value="admin">Administrador</option>
+          {ROLES.map((r) => (
+            <option key={r} value={r}>
+              {ROLE_LABEL[r]}
+            </option>
+          ))}
         </select>
       </div>
 

@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { requireManager } from "@/lib/auth/session";
 import { MovementForm } from "@/components/movements/MovementForm";
 import { createMovement } from "../actions";
 import type { Item } from "@/lib/types";
@@ -11,7 +11,7 @@ export default async function NovaMovimentacaoPage({
   searchParams: Promise<{ item?: string }>;
 }) {
   const { item } = await searchParams;
-  const supabase = await createClient();
+  const { supabase } = await requireManager();
   const { data: items, error } = await supabase
     .from("items")
     .select("*")

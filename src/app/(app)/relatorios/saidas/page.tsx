@@ -1,4 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
+import { requireManager } from "@/lib/auth/session";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 import { MonthPicker } from "@/components/reports/MonthPicker";
 import { MonthlyMovementsChart } from "@/components/reports/MonthlyMovementsChart";
 import { ExportCsvButton } from "@/components/reports/ExportCsvButton";
@@ -19,21 +20,25 @@ export default async function RelatorioSaidasPage({
   const month = monthParam ?? currentMonthParam();
   const { start, end } = getMonthRange(month);
 
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("movements")
-    .select("*, items(id, name, sku, unit), employees(id, full_name)")
-    .eq("type", "saida")
-    .gte("created_at", start)
-    .lt("created_at", end)
-    .order("created_at", { ascending: false });
+  const { supabase } = await requireManager();
+  const { rows: data, truncated, error } = await fetchAllRows<MovementWithRelations>((from, to) =>
+    supabase
+      .from("movements")
+      .select("*, items(id, name, sku, unit), employees(id, full_name)")
+      .eq("type", "saida")
+      .gte("created_at", start)
+      .lt("created_at", end)
+      .order("created_at", { ascending: false })
+      .range(from, to)
+      .then((r) => ({ data: r.data as MovementWithRelations[] | null, error: r.error }))
+  );
 
   if (error)
     console.error(
-      `[relatorios/saidas] erro ao buscar movements: code=${error.code} message=${error.message} details=${error.details} hint=${error.hint}`
+      `[relatorios/saidas] erro ao buscar movements: ${error}`
     );
 
-  const movements = (data as MovementWithRelations[]) ?? [];
+  const movements = data;
   const summary = summarizeMovements(movements);
   const chartData = groupByDay(movements);
 
@@ -58,6 +63,9 @@ export default async function RelatorioSaidasPage({
         />
       </div>
 
+      {truncated && (
+        <p className="text-sm text-warning">Período com muitos registros: exibindo os 20.000 mais recentes.</p>
+      )}
       <MonthlyMovementsChart data={chartData} />
       <MovementsTable movements={movements} />
     </div>

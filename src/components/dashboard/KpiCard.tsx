@@ -1,21 +1,34 @@
 import type { LucideIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export function KpiCard({
   label,
   value,
   hint,
   icon: Icon,
+  tone,
 }: {
   label: string;
   value: string;
   hint?: string;
   icon?: LucideIcon;
+  tone?: "default" | "success" | "danger" | "warning";
 }) {
   return (
     <div className="card card-hover flex items-start justify-between gap-3">
-      <div>
+      <div className="min-w-0">
         <p className="text-xs font-medium uppercase tracking-wide text-muted">{label}</p>
-        <p className="mt-1.5 text-2xl font-semibold tracking-tight text-foreground">{value}</p>
+        <p
+          className={cn(
+            "mt-1.5 truncate text-2xl font-semibold tracking-tight",
+            tone === "success" && "text-success",
+            tone === "danger" && "text-danger",
+            tone === "warning" && "text-warning",
+            (!tone || tone === "default") && "text-foreground"
+          )}
+        >
+          {value}
+        </p>
         {hint && <p className="mt-1 text-xs text-muted">{hint}</p>}
       </div>
       {Icon && (

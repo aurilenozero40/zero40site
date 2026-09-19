@@ -1,34 +1,22 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getSession } from "@/lib/auth/session";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { ToastProvider } from "@/components/ui/toast-context";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const supabase = await createClient();
+  const { user, employee } = await getSession();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { data: employee } = await supabase
-    .from("employees")
-    .select("full_name, role")
-    .eq("id", user.id)
-    .single();
-
-  const isAdmin = employee?.role === "admin";
+  if (!user) redirect("/login");
+  // Logado, mas sem cadastro de funcionário (ou inativo): tela própria, sem loop com o proxy.
+  if (!employee) redirect("/sem-acesso");
 
   return (
     <ToastProvider>
       <div className="flex flex-1">
-        <Sidebar isAdmin={isAdmin} />
-        <div className="flex flex-1 flex-col">
-          <TopBar fullName={employee?.full_name ?? user.email ?? "Funcionário"} isAdmin={isAdmin} />
+        <Sidebar role={employee.role} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <TopBar fullName={employee.fullName} role={employee.role} />
           <main className="flex-1 overflow-y-auto bg-background p-4 md:p-6">{children}</main>
         </div>
       </div>

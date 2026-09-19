@@ -23,6 +23,11 @@ export function formatDate(value: string | Date, withTime = false) {
   }).format(date);
 }
 
+/** Escapa % _ \ para usar texto do usuário dentro de um ILIKE sem virar curinga. */
+export function escapeLike(value: string) {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 export function formatQuantity(value: number, unit?: string | null) {
   const formatted = new Intl.NumberFormat("pt-BR", {
     maximumFractionDigits: 3,
