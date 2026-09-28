@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle2, Minus, Plus, ScanBarcode, ShoppingCart, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Minus, Plus, Repeat, ScanBarcode, ShoppingCart, Trash2, X } from "lucide-react";
 import {
   createSaleAction,
   searchProductsAction,
+  verifySerialAction,
   type CustomerHit,
   type ProductHit,
 } from "@/app/(app)/vendas/actions";
@@ -39,11 +40,29 @@ interface CartLine {
   unitPriceCents: number;
   stock: number;
   qtyText: string;
+  trackSerial: boolean;
+  serials: string[];
 }
 
 interface Notice {
   kind: "error" | "info" | "ok";
   text: string;
+}
+
+interface TradeIn {
+  itemName: string;
+  category: string;
+  value: string;
+}
+
+interface PendingSerial {
+  itemId: string;
+  name: string;
+  sku: string | null;
+  barcode: string | null;
+  unit: string;
+  unitPriceCents: number;
+  stock: number;
 }
 
 const parseNumber = (text: string) => {
@@ -75,6 +94,13 @@ export function PosScreen({
   const searchRef = useRef<HTMLInputElement>(null);
   const seq = useRef(0);
 
+  // ---- bipagem de número de série (produtos com track_serial) ------------------------------
+  const [pendingSerial, setPendingSerial] = useState<PendingSerial | null>(null);
+  const [serialInput, setSerialInput] = useState("");
+  const [serialError, setSerialError] = useState<string | null>(null);
+  const [verifyingSerial, setVerifyingSerial] = useState(false);
+  const serialRef = useRef<HTMLInputElement>(null);
+
   // ---- venda -----------------------------------------------------------------------------------
   const [customer, setCustomer] = useState<CustomerHit | null>(null);
   const [method, setMethod] = useState<PaymentMethod>("pix");
@@ -86,6 +112,11 @@ export function PosScreen({
   const [notes, setNotes] = useState("");
   const [reviewing, setReviewing] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // ---- entrada (troca): cliente entrega um produto usado que abate o total ----------------
+  const [tradeIn, setTradeIn] = useState<TradeIn | null>(null);
+  const [tradeInDraft, setTradeInDraft] = useState<TradeIn>({ itemName: "", category: "", value: "" });
+  const [tradeInModal, setTradeInModal] = useState(false);
 
   // só mostra o resultado da busca que corresponde ao texto atual (nada de resultado velho)
   const results = found.q === query.trim() ? found.hits : [];
@@ -102,7 +133,8 @@ export function PosScreen({
   const discountCents = Math.min(Math.max(discountRaw, 0), subtotalCents);
   const maxDiscount = maxDiscountCents(subtotalCents, discountLimitPercent);
   const interestPercent = method === "credito_parcelado" ? parseNumber(interestText) : 0;
-  const pricing = computeSaleTotals({ subtotalCents, discountCents, method, installments: installmentsEff, interestPercent });
+  const tradeInCents = tradeIn ? toCents(parseNumber(tradeIn.value)) : 0;
+  const pricing = computeSaleTotals({ subtotalCents, discountCents, method, installments: installmentsEff, interestPercent, tradeInCents });
 
   const key = feeKey(method, installmentsEff);
   const feePercent = isCard && brand && key !== null ? feeRates[brand]?.[key] : undefined;
@@ -122,19 +154,23 @@ export function PosScreen({
     blocking.push(`Sem taxa cadastrada para ${brandLabel(brand)} em ${method === "debito" ? "débito" : method === "credito_vista" ? "crédito à vista" : `${installmentsEff}x`}.`);
   if (method === "credito_parcelado" && interestPercent > maxInterestPercent) blocking.push(`Juros acima do máximo permitido (${maxInterestPercent}%).`);
   if (interestPercent < 0) blocking.push("Juros inválido.");
+  if (tradeIn && tradeInCents <= 0) blocking.push("Informe o valor do produto recebido de entrada.");
+  else if (tradeIn && tradeInCents >= pricing.baseCents + pricing.interestCents)
+    blocking.push("O valor de entrada não pode ser maior ou igual ao total da venda.");
 
   const canReview = cart.length > 0 && blocking.length === 0;
 
   // ---- chave de idempotência: muda sempre que o conteúdo da venda muda ----------------------------
   const payload = {
     customerId: customer?.id ?? null,
-    items: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+    items: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity, serials: l.trackSerial ? l.serials : undefined })),
     discountAmount: discountCents / 100,
     paymentMethod: method,
     installments: installmentsEff,
     interestPercent,
     cardBrand: isCard ? brand || null : null,
     notes: notes.trim() || null,
+    tradeIn: tradeIn ? { itemName: tradeIn.itemName, category: tradeIn.category.trim() || null, value: parseNumber(tradeIn.value) } : null,
   };
   const signature = JSON.stringify(payload);
   const keyRef = useRef({ signature: "", key: "" });
@@ -173,23 +209,44 @@ export function PosScreen({
     return () => clearTimeout(t);
   }, [notice]);
 
+  useEffect(() => {
+    if (pendingSerial) serialRef.current?.focus();
+  }, [pendingSerial]);
+
   // ---- ações -----------------------------------------------------------------------------------------------
   function addProduct(hit: ProductHit) {
     setShowResults(false);
     setQuery("");
-    searchRef.current?.focus();
 
     if (hit.sale_price === null || hit.sale_price <= 0) {
+      searchRef.current?.focus();
       return setNotice({ kind: "error", text: `Produto sem preço de venda: ${hit.name}.` });
     }
     if (hit.quantity <= 0) {
+      searchRef.current?.focus();
       return setNotice({ kind: "error", text: `Estoque insuficiente: ${hit.name} está sem estoque.` });
+    }
+
+    if (hit.track_serial) {
+      setPendingSerial({
+        itemId: hit.id,
+        name: hit.name,
+        sku: hit.sku,
+        barcode: hit.barcode,
+        unit: hit.unit,
+        unitPriceCents: toCents(hit.sale_price!),
+        stock: hit.quantity,
+      });
+      setSerialInput("");
+      setSerialError(null);
+      return setNotice({ kind: "info", text: `Bipe o número de série de ${hit.name}.` });
     }
 
     const existing = cart.find((l) => l.itemId === hit.id);
     if (existing) {
       const next = parseNumber(existing.qtyText) + 1;
       if (next > hit.quantity) {
+        searchRef.current?.focus();
         return setNotice({ kind: "error", text: `Estoque insuficiente: ${hit.name} (disponível ${formatQuantity(hit.quantity, hit.unit)}).` });
       }
       setCart((c) => c.map((l) => (l.itemId === hit.id ? { ...l, stock: hit.quantity, qtyText: String(next) } : l)));
@@ -205,10 +262,73 @@ export function PosScreen({
           unitPriceCents: toCents(hit.sale_price!),
           stock: hit.quantity,
           qtyText: "1",
+          trackSerial: false,
+          serials: [],
         },
       ]);
     }
+    searchRef.current?.focus();
     setNotice({ kind: "ok", text: `${hit.name} adicionado.` });
+  }
+
+  function cancelSerialScan() {
+    setPendingSerial(null);
+    setSerialInput("");
+    setSerialError(null);
+    searchRef.current?.focus();
+  }
+
+  async function confirmSerialScan() {
+    const s = serialInput.trim();
+    setSerialError(null);
+    if (!s || !pendingSerial) return;
+    if (cart.some((l) => l.serials.includes(s))) {
+      return setSerialError(`${s} já foi bipado nesta venda.`);
+    }
+    setVerifyingSerial(true);
+    const result = await verifySerialAction(pendingSerial.itemId, s);
+    setVerifyingSerial(false);
+    if (!result.ok) {
+      setSerialError(result.error);
+      return;
+    }
+
+    setCart((c) => {
+      const existing = c.find((l) => l.itemId === pendingSerial.itemId);
+      if (existing) {
+        const nextSerials = [...existing.serials, s];
+        return c.map((l) => (l.itemId === pendingSerial.itemId ? { ...l, serials: nextSerials, qtyText: String(nextSerials.length) } : l));
+      }
+      return [
+        ...c,
+        {
+          itemId: pendingSerial.itemId,
+          name: pendingSerial.name,
+          sku: pendingSerial.sku,
+          barcode: pendingSerial.barcode,
+          unit: pendingSerial.unit,
+          unitPriceCents: pendingSerial.unitPriceCents,
+          stock: pendingSerial.stock,
+          qtyText: "1",
+          trackSerial: true,
+          serials: [s],
+        },
+      ];
+    });
+    setNotice({ kind: "ok", text: `${pendingSerial.name} — ${s} adicionado.` });
+    setPendingSerial(null);
+    setSerialInput("");
+    searchRef.current?.focus();
+  }
+
+  function removeSerialFromLine(itemId: string, serial: string) {
+    setCart((c) =>
+      c.flatMap((l) => {
+        if (l.itemId !== itemId) return [l];
+        const nextSerials = l.serials.filter((s) => s !== serial);
+        return nextSerials.length === 0 ? [] : [{ ...l, serials: nextSerials, qtyText: String(nextSerials.length) }];
+      })
+    );
   }
 
   async function submitSearch() {
@@ -277,7 +397,8 @@ export function PosScreen({
               ref={searchRef}
               autoFocus
               autoComplete="off"
-              className="input h-11 pl-10 text-base"
+              disabled={!!pendingSerial}
+              className="input h-11 pl-10 text-base disabled:opacity-50"
               placeholder="Bipe o código de barras ou digite nome/SKU"
               value={query}
               onChange={(e) => {
@@ -337,6 +458,46 @@ export function PosScreen({
           )}
         </div>
 
+        {pendingSerial && (
+          <div className="card flex flex-col gap-2 border-accent/40 bg-accent/5">
+            <label htmlFor="pos_serial" className="label mb-0">
+              Número de série de {pendingSerial.name}
+            </label>
+            <div className="flex gap-2">
+              <input
+                id="pos_serial"
+                ref={serialRef}
+                autoComplete="off"
+                className="input h-11 flex-1 text-base"
+                placeholder="Bipe o número de série e aperte Enter"
+                value={serialInput}
+                onChange={(e) => {
+                  setSerialInput(e.target.value);
+                  setSerialError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void confirmSerialScan();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelSerialScan();
+                  }
+                }}
+                disabled={verifyingSerial}
+              />
+              <button type="button" className="btn-secondary" onClick={cancelSerialScan}>
+                Cancelar
+              </button>
+            </div>
+            {serialError && (
+              <p role="alert" className="flex items-center gap-1.5 text-sm font-medium text-danger">
+                <AlertTriangle size={14} /> {serialError}
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="card overflow-x-auto p-0">
           {cart.length === 0 ? (
             <div className="flex flex-col items-center gap-2 px-4 py-16 text-center text-muted">
@@ -369,21 +530,37 @@ export function PosScreen({
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{cents(l.unitPriceCents)}</td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <button type="button" className="rounded border border-border p-1 hover:bg-background" onClick={() => stepQty(l, -1)} aria-label="Diminuir">
-                            <Minus size={14} />
-                          </button>
-                          <input
-                            inputMode="decimal"
-                            aria-label={`Quantidade de ${l.name}`}
-                            className={cn("input h-8 w-16 px-1 text-center", (over || invalid) && "border-danger")}
-                            value={l.qtyText}
-                            onChange={(e) => setQty(l.itemId, e.target.value)}
-                          />
-                          <button type="button" className="rounded border border-border p-1 hover:bg-background" onClick={() => stepQty(l, 1)} aria-label="Aumentar">
-                            <Plus size={14} />
-                          </button>
-                        </div>
+                        {l.trackSerial ? (
+                          <div className="flex flex-col gap-1">
+                            <span className="text-sm tabular-nums text-foreground">{l.serials.length}</span>
+                            <ul className="flex flex-wrap gap-1">
+                              {l.serials.map((s) => (
+                                <li key={s} className="flex items-center gap-1 rounded-full bg-background px-2 py-0.5 font-mono text-[11px] text-muted">
+                                  {s}
+                                  <button type="button" onClick={() => removeSerialFromLine(l.itemId, s)} aria-label={`Remover ${s}`} className="hover:text-danger">
+                                    <X size={10} />
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1">
+                            <button type="button" className="rounded border border-border p-1 hover:bg-background" onClick={() => stepQty(l, -1)} aria-label="Diminuir">
+                              <Minus size={14} />
+                            </button>
+                            <input
+                              inputMode="decimal"
+                              aria-label={`Quantidade de ${l.name}`}
+                              className={cn("input h-8 w-16 px-1 text-center", (over || invalid) && "border-danger")}
+                              value={l.qtyText}
+                              onChange={(e) => setQty(l.itemId, e.target.value)}
+                            />
+                            <button type="button" className="rounded border border-border p-1 hover:bg-background" onClick={() => stepQty(l, 1)} aria-label="Aumentar">
+                              <Plus size={14} />
+                            </button>
+                          </div>
+                        )}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums text-foreground">
                         {cents(lineTotalCents(l.unitPriceCents, l.quantity))}
@@ -470,6 +647,50 @@ export function PosScreen({
           )}
         </div>
 
+        <div className="card flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-foreground">Entrada (troca)</h2>
+            {!tradeIn && (
+              <button
+                type="button"
+                className="flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+                onClick={() => {
+                  setTradeInDraft({ itemName: "", category: "", value: "" });
+                  setTradeInModal(true);
+                }}
+              >
+                <Repeat size={13} /> Recebeu algo de entrada?
+              </button>
+            )}
+          </div>
+          {tradeIn ? (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-foreground">{tradeIn.itemName}</p>
+                <p className="text-xs text-muted">{cents(tradeInCents)} abatido do total</p>
+              </div>
+              <div className="flex shrink-0 gap-1">
+                <button
+                  type="button"
+                  className="rounded p-1.5 text-muted hover:bg-surface hover:text-foreground"
+                  onClick={() => {
+                    setTradeInDraft(tradeIn);
+                    setTradeInModal(true);
+                  }}
+                  aria-label="Editar entrada"
+                >
+                  <Repeat size={14} />
+                </button>
+                <button type="button" className="rounded p-1.5 text-muted hover:bg-surface hover:text-danger" onClick={() => setTradeIn(null)} aria-label="Remover entrada">
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-muted">Ex.: cliente entrega o relógio usado e o valor abate o total da venda.</p>
+          )}
+        </div>
+
         <div className="card flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-foreground">Desconto</h2>
@@ -506,6 +727,7 @@ export function PosScreen({
           <Row label="Subtotal" value={cents(pricing.subtotalCents)} />
           {pricing.discountCents > 0 && <Row label="Desconto" value={`− ${cents(pricing.discountCents)}`} className="text-success" />}
           {pricing.interestCents > 0 && <Row label={`Juros (${interestPercent.toLocaleString("pt-BR")}%)`} value={`+ ${cents(pricing.interestCents)}`} className="text-warning" />}
+          {pricing.tradeInCents > 0 && <Row label="Entrada (troca)" value={`− ${cents(pricing.tradeInCents)}`} className="text-success" />}
           <div className="my-1 border-t border-border" />
           <div className="flex items-end justify-between">
             <span className="text-sm text-muted">Total</span>
@@ -539,7 +761,7 @@ export function PosScreen({
             </ul>
           )}
 
-          <button type="button" className="btn-primary mt-2 h-11 text-base" disabled={!canReview || pending} onClick={() => setReviewing(true)}>
+          <button type="button" className="btn-primary mt-2 h-11 text-base" disabled={!canReview || pending || !!pendingSerial} onClick={() => setReviewing(true)}>
             Revisar venda
           </button>
           {cart.length > 0 && (
@@ -550,6 +772,7 @@ export function PosScreen({
                 if (confirm("Limpar o carrinho?")) {
                   setCart([]);
                   setDiscountText("");
+                  setTradeIn(null);
                 }
               }}
             >
@@ -565,8 +788,11 @@ export function PosScreen({
           <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
             {lines.map((l) => (
               <li key={l.itemId} className="flex items-center justify-between gap-3 px-3 py-2">
-                <span className="min-w-0 truncate">
-                  {formatQuantity(l.quantity)}× {l.name}
+                <span className="min-w-0">
+                  <span className="block truncate">
+                    {formatQuantity(l.quantity)}× {l.name}
+                  </span>
+                  {l.trackSerial && <span className="block truncate font-mono text-xs text-muted">{l.serials.join(", ")}</span>}
                 </span>
                 <span className="shrink-0 tabular-nums">{cents(lineTotalCents(l.unitPriceCents, l.quantity))}</span>
               </li>
@@ -598,6 +824,12 @@ export function PosScreen({
                 <dd className="text-right tabular-nums text-warning">+ {cents(pricing.interestCents)}</dd>
               </>
             )}
+            {pricing.tradeInCents > 0 && (
+              <>
+                <dt className="text-muted">Entrada ({tradeIn?.itemName})</dt>
+                <dd className="text-right tabular-nums text-success">− {cents(pricing.tradeInCents)}</dd>
+              </>
+            )}
             <dt className="text-base font-semibold text-foreground">Total</dt>
             <dd className="text-right text-lg font-semibold tabular-nums text-foreground">{cents(pricing.totalCents)}</dd>
           </dl>
@@ -621,6 +853,73 @@ export function PosScreen({
             </button>
             <button type="button" className="btn-primary" disabled={pending} onClick={confirmSale}>
               {pending ? "Registrando..." : "Confirmar venda"}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ===== entrada (troca): produto usado que o cliente entrega ===== */}
+      <Modal
+        open={tradeInModal}
+        onOpenChange={setTradeInModal}
+        title="Recebeu algo de entrada?"
+        description="O valor abate o total da venda. O produto entra automaticamente no estoque como seminovo."
+      >
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className="label" htmlFor="ti_name">
+              Produto recebido *
+            </label>
+            <input
+              id="ti_name"
+              autoFocus
+              className="input"
+              placeholder="Ex: Relógio Casio usado"
+              value={tradeInDraft.itemName}
+              onChange={(e) => setTradeInDraft((d) => ({ ...d, itemName: e.target.value }))}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label" htmlFor="ti_category">
+                Categoria
+              </label>
+              <input
+                id="ti_category"
+                className="input"
+                placeholder="Opcional"
+                value={tradeInDraft.category}
+                onChange={(e) => setTradeInDraft((d) => ({ ...d, category: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="ti_value">
+                Valor de entrada (R$) *
+              </label>
+              <input
+                id="ti_value"
+                inputMode="decimal"
+                className="input"
+                placeholder="0,00"
+                value={tradeInDraft.value}
+                onChange={(e) => setTradeInDraft((d) => ({ ...d, value: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-secondary" onClick={() => setTradeInModal(false)}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!tradeInDraft.itemName.trim() || parseNumber(tradeInDraft.value) <= 0}
+              onClick={() => {
+                setTradeIn(tradeInDraft);
+                setTradeInModal(false);
+              }}
+            >
+              Salvar
             </button>
           </div>
         </div>

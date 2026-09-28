@@ -15,6 +15,9 @@ interface ReturnableItem {
   unit: string;
   quantity: number;
   returned: number;
+  trackSerial: boolean;
+  /** números de série ainda vendidos (não devolvidos) desse item nesta venda */
+  soldSerials: string[];
 }
 
 /** Cancelar venda e registrar devolução (só aparece para gerente+; o banco confere de novo). */
@@ -36,6 +39,7 @@ export function SaleActions({
   const [mode, setMode] = useState<"cancel" | "return" | null>(null);
   const [reason, setReason] = useState("");
   const [qty, setQty] = useState<Record<string, string>>({});
+  const [selectedSerials, setSelectedSerials] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
   const returnKey = useRef({ signature: "", key: "" });
 
@@ -48,8 +52,17 @@ export function SaleActions({
     setMode(null);
     setReason("");
     setQty({});
+    setSelectedSerials({});
     setError(null);
   };
+
+  function toggleSerial(itemId: string, serial: string) {
+    setSelectedSerials((prev) => {
+      const current = prev[itemId] ?? [];
+      const next = current.includes(serial) ? current.filter((s) => s !== serial) : [...current, serial];
+      return { ...prev, [itemId]: next };
+    });
+  }
 
   function submitCancel() {
     setError(null);
@@ -65,7 +78,11 @@ export function SaleActions({
   function submitReturn() {
     setError(null);
     const lines = items
-      .map((i) => ({ saleItemId: i.id, quantity: Number((qty[i.id] ?? "0").replace(",", ".")) || 0 }))
+      .map((i) =>
+        i.trackSerial
+          ? { saleItemId: i.id, quantity: (selectedSerials[i.id] ?? []).length, serials: selectedSerials[i.id] }
+          : { saleItemId: i.id, quantity: Number((qty[i.id] ?? "0").replace(",", ".")) || 0 }
+      )
       .filter((l) => l.quantity > 0);
     // mesma devolução repetida (retry) reaproveita a chave; mudou o conteúdo, chave nova
     const signature = JSON.stringify({ lines, reason });
@@ -78,11 +95,15 @@ export function SaleActions({
       setMode(null);
       setReason("");
       setQty({});
+      setSelectedSerials({});
       router.refresh();
     });
   }
 
   const returnLines = items.filter((i) => i.quantity - i.returned > 0);
+  const hasSomethingToReturn = returnLines.some((i) =>
+    i.trackSerial ? (selectedSerials[i.id] ?? []).length > 0 : Number((qty[i.id] ?? "0").replace(",", ".")) > 0
+  );
 
   return (
     <>
@@ -132,22 +153,50 @@ export function SaleActions({
       >
         <div className="flex flex-col gap-3">
           <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
-            {returnLines.map((i) => (
-              <li key={i.id} className="flex items-center justify-between gap-3 px-3 py-2">
-                <div className="min-w-0">
+            {returnLines.map((i) =>
+              i.trackSerial ? (
+                <li key={i.id} className="flex flex-col gap-1.5 px-3 py-2">
                   <p className="truncate text-sm font-medium text-foreground">{i.name}</p>
-                  <p className="text-xs text-muted">Pode devolver até {formatQuantity(i.quantity - i.returned, i.unit)}</p>
-                </div>
-                <input
-                  inputMode="decimal"
-                  aria-label={`Quantidade a devolver de ${i.name}`}
-                  className="input h-8 w-20 px-2 text-center"
-                  placeholder="0"
-                  value={qty[i.id] ?? ""}
-                  onChange={(e) => setQty((q) => ({ ...q, [i.id]: e.target.value }))}
-                />
-              </li>
-            ))}
+                  {i.soldSerials.length === 0 ? (
+                    <p className="text-xs text-muted">Nenhum número de série disponível para devolver.</p>
+                  ) : (
+                    <ul className="flex flex-wrap gap-1.5">
+                      {i.soldSerials.map((s) => {
+                        const checked = (selectedSerials[i.id] ?? []).includes(s);
+                        return (
+                          <li key={s}>
+                            <button
+                              type="button"
+                              onClick={() => toggleSerial(i.id, s)}
+                              className={`rounded-full border px-2.5 py-1 font-mono text-xs ${
+                                checked ? "border-accent bg-accent/15 text-foreground" : "border-border text-muted hover:text-foreground"
+                              }`}
+                            >
+                              {s}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </li>
+              ) : (
+                <li key={i.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">{i.name}</p>
+                    <p className="text-xs text-muted">Pode devolver até {formatQuantity(i.quantity - i.returned, i.unit)}</p>
+                  </div>
+                  <input
+                    inputMode="decimal"
+                    aria-label={`Quantidade a devolver de ${i.name}`}
+                    className="input h-8 w-20 px-2 text-center"
+                    placeholder="0"
+                    value={qty[i.id] ?? ""}
+                    onChange={(e) => setQty((q) => ({ ...q, [i.id]: e.target.value }))}
+                  />
+                </li>
+              )
+            )}
           </ul>
           <div>
             <label className="label" htmlFor="return_reason">
@@ -164,7 +213,7 @@ export function SaleActions({
               type="button"
               className="btn-primary"
               onClick={submitReturn}
-              disabled={pending || reason.trim().length < 3 || !returnLines.some((i) => Number((qty[i.id] ?? "0").replace(",", ".")) > 0)}
+              disabled={pending || reason.trim().length < 3 || !hasSomethingToReturn}
             >
               {pending ? "Registrando..." : "Confirmar devolução"}
             </button>

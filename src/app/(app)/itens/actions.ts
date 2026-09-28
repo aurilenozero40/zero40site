@@ -24,6 +24,8 @@ function parseFormData(formData: FormData) {
     max_stock: formData.get("max_stock") === "" ? "" : Number(formData.get("max_stock")),
     location: formData.get("location") || "principal",
     supplier_id: formData.get("supplier_id"),
+    track_serial: formData.get("track_serial") === "on",
+    condition: formData.get("condition") || "novo",
   };
 }
 

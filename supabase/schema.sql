@@ -81,6 +81,18 @@ create table if not exists public.suppliers (
   created_at timestamptz not null default now()
 );
 
+do $$
+begin
+  create unique index if not exists suppliers_name_key on public.suppliers (lower(name));
+exception when others then
+  raise notice 'Não foi possível criar índice único em suppliers (nomes duplicados existentes?): %', sqlerrm;
+end $$;
+
+-- Fornecedores/origens de compra do lojista — pode crescer pela tela, isso aqui é só o ponto de partida.
+insert into public.suppliers (name)
+select v.name from (values ('EUA'), ('EUROPA'), ('PRG'), ('SP')) as v(name)
+where not exists (select 1 from public.suppliers s where lower(s.name) = lower(v.name));
+
 -- ---- 1.3 items (produtos) ---------------------------------------------------
 create table if not exists public.items (
   id            uuid primary key default gen_random_uuid(),
@@ -101,6 +113,8 @@ create table if not exists public.items (
   abc_class     text check (abc_class in ('A', 'B', 'C')),
   location      text default 'principal',
   supplier_id   uuid references public.suppliers(id) on delete set null,
+  track_serial  boolean not null default false,       -- true: cada unidade tem número de série/IMEI próprio
+  condition     text not null default 'novo' check (condition in ('novo', 'seminovo')),
   active        boolean not null default true,
   created_by    uuid references public.employees(id) default auth.uid(),
   created_at    timestamptz not null default now(),
@@ -168,6 +182,13 @@ create table if not exists public.card_fee_rates (
 -- ---- 2.1 colunas que versões antigas não tinham ------------------------------------
 alter table public.employees add column if not exists username text;
 alter table public.items     add column if not exists description text;
+alter table public.items     add column if not exists track_serial boolean not null default false;
+alter table public.items     add column if not exists condition text not null default 'novo';
+do $$
+begin
+  alter table public.items add constraint items_condition_check check (condition in ('novo', 'seminovo'));
+exception when duplicate_object then null;
+end $$;
 alter table public.items     alter column created_by set default auth.uid();
 alter table public.movements add column if not exists sale_id uuid;
 alter table public.movements add column if not exists card_brand text;
@@ -232,15 +253,16 @@ end $$;
 alter table public.movements
   add constraint movements_subtype_check
   check (subtype is null or subtype in
-    ('compra','devolucao','transferencia','uso','perda','venda','emprestimo','cancelamento','outros'));
+    ('compra','devolucao','transferencia','uso','perda','venda','emprestimo','cancelamento','troca','outros'));
 
 -- Coerência tipo × subtipo (NOT VALID: não reprova histórico, barra tudo que for novo).
+-- 'troca' (entrada) só nasce dentro de create_sale — produto recebido do cliente como entrada.
 alter table public.movements
   add constraint movements_subtype_type_check
   check (
     subtype is null
     or subtype = 'outros'
-    or (type = 'entrada' and subtype in ('compra','devolucao','transferencia','cancelamento'))
+    or (type = 'entrada' and subtype in ('compra','devolucao','transferencia','cancelamento','troca'))
     or (type = 'saida'   and subtype in ('uso','perda','venda','emprestimo'))
     or (type = 'ajuste')
   ) not valid;
@@ -376,13 +398,15 @@ create table if not exists public.sales (
   interest_amount numeric(12,2) not null default 0 check (interest_amount >= 0),
   total           numeric(12,2) not null check (total >= 0),
   refunded_amount numeric(12,2) not null default 0 check (refunded_amount >= 0),
+  trade_in_amount numeric(12,2) not null default 0 check (trade_in_amount >= 0),
+  trade_in_item_id uuid references public.items(id),
   notes           text,
   cancelled_at    timestamptz,
   cancelled_by    uuid references public.employees(id),
   cancel_reason   text,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
-  constraint sales_total_consistent check (total = subtotal - discount_amount + interest_amount),
+  constraint sales_total_consistent check (total = subtotal - discount_amount + interest_amount - trade_in_amount),
   constraint sales_cancel_consistent check (status <> 'cancelada' or (cancelled_at is not null and cancel_reason is not null))
 );
 
@@ -390,6 +414,20 @@ create index if not exists idx_sales_created  on public.sales (created_at desc);
 create index if not exists idx_sales_seller   on public.sales (seller_id, created_at desc);
 create index if not exists idx_sales_customer on public.sales (customer_id, created_at desc);
 create index if not exists idx_sales_status   on public.sales (status, created_at desc);
+
+-- ---- 5.1b compatibilidade: colunas de entrada (troca) que bancos antigos não têm --------------
+alter table public.sales add column if not exists trade_in_amount numeric(12,2) not null default 0;
+alter table public.sales add column if not exists trade_in_item_id uuid references public.items(id);
+
+-- total passa a descontar também o valor de entrada (troca) — recria a constraint com a fórmula nova.
+do $$
+begin
+  alter table public.sales drop constraint if exists sales_total_consistent;
+  alter table public.sales
+    add constraint sales_total_consistent check (total = subtotal - discount_amount + interest_amount - trade_in_amount);
+exception when others then
+  raise notice 'Não foi possível recriar sales_total_consistent: %', sqlerrm;
+end $$;
 
 -- ---- 5.3 sale_items (foto do produto no momento da venda) -------------------------------
 create table if not exists public.sale_items (
@@ -439,6 +477,27 @@ begin
     add constraint movements_sale_id_fkey foreign key (sale_id) references public.sales(id);
 exception when duplicate_object then null;
 end $$;
+
+-- ---- 5.6 item_serials: uma linha por UNIDADE FÍSICA de item com track_serial -----------------
+--   status: estoque (disponível) | vendido (numa venda) | baixado (perda/uso/empréstimo/ajuste)
+--   serial é único NO SISTEMA TODO (IMEI/serial não se repete entre produtos diferentes).
+create table if not exists public.item_serials (
+  id              uuid primary key default gen_random_uuid(),
+  item_id         uuid not null references public.items(id) on delete restrict,
+  serial          text not null,
+  status          text not null default 'estoque' check (status in ('estoque', 'vendido', 'baixado')),
+  sale_item_id    uuid references public.sale_items(id),
+  movement_in_id  uuid references public.movements(id),
+  movement_out_id uuid references public.movements(id),
+  created_by      uuid references public.employees(id) default auth.uid(),
+  created_at      timestamptz not null default now(),
+  sold_at         timestamptz,
+  removed_at      timestamptz
+);
+
+create unique index if not exists item_serials_serial_key on public.item_serials (serial);
+create index if not exists idx_item_serials_item_status   on public.item_serials (item_id, status);
+create index if not exists idx_item_serials_sale_item     on public.item_serials (sale_item_id) where sale_item_id is not null;
 
 
 -- ============================================================================
@@ -833,6 +892,7 @@ alter table public.sale_items          enable row level security;
 alter table public.sale_payments       enable row level security;
 alter table public.audit_logs          enable row level security;
 alter table public.notification_outbox enable row level security;
+alter table public.item_serials        enable row level security;
 
 -- Recria TODAS as policies (os nomes em bancos antigos divergiam do repositório).
 do $$
@@ -842,7 +902,8 @@ begin
     select schemaname, tablename, policyname from pg_policies
     where schemaname = 'public'
       and tablename in ('employees','suppliers','items','movements','card_fee_rates','app_settings',
-                        'customers','sales','sale_items','sale_payments','audit_logs','notification_outbox')
+                        'customers','sales','sale_items','sale_payments','audit_logs','notification_outbox',
+                        'item_serials')
   loop
     execute format('drop policy %I on %I.%I', p.policyname, p.schemaname, p.tablename);
   end loop;
@@ -864,16 +925,10 @@ create policy items_insert on public.items for insert with check (public.is_mana
 create policy items_update on public.items for update using (public.is_manager()) with check (public.is_manager());
 create policy items_delete on public.items for delete using (public.is_admin());
 
--- movements: leitura para todos; lançamento manual só gerente+ e NUNCA de venda/cancelamento
--- (esses nascem exclusivamente nas funções de venda).
+-- movements: leitura para todos; toda escrita (venda, cancelamento, lançamento manual) nasce
+-- só pelas funções de negócio (create_sale, cancel_sale, return_sale_items, create_movement) —
+-- por isso não existe policy de insert aqui (ver revoke em 9.2); a função valida o perfil por dentro.
 create policy movements_select on public.movements for select using (auth.uid() is not null);
-create policy movements_insert on public.movements for insert
-  with check (
-    public.is_manager()
-    and created_by = auth.uid()
-    and sale_id is null
-    and coalesce(subtype, '') not in ('venda', 'cancelamento')
-  );
 
 create policy card_fee_rates_select on public.card_fee_rates for select using (auth.uid() is not null);
 create policy card_fee_rates_write on public.card_fee_rates for all
@@ -900,6 +955,9 @@ create policy sale_payments_select on public.sale_payments for select
 create policy audit_logs_select on public.audit_logs for select using (public.is_manager());
 create policy outbox_select on public.notification_outbox for select using (public.is_manager());
 
+-- item_serials: leitura para todo funcionário logado; escrita só pelas funções (create_movement, create_sale...).
+create policy item_serials_select on public.item_serials for select using (auth.uid() is not null);
+
 -- ---- 9.2 privilégios --------------------------------------------------------------------------
 -- items.quantity NUNCA é escrito direto (nem no cadastro): só pelo ledger de movimentações.
 do $$
@@ -916,9 +974,12 @@ begin
 end $$;
 
 -- Ledger, vendas, auditoria e fila: nada de escrita direta por usuários (só pelas funções).
-revoke update, delete on public.movements from authenticated, anon;
+-- movements.insert também: motivo, quantidade e (quando o item usa serial) os números de série
+-- precisam ser validados juntos, então até o lançamento manual passa por create_movement().
+revoke insert, update, delete on public.movements from authenticated, anon;
 revoke insert, update, delete on public.sales, public.sale_items, public.sale_payments from authenticated, anon;
 revoke insert, update, delete on public.audit_logs, public.notification_outbox from authenticated, anon;
+revoke insert, update, delete on public.item_serials from authenticated, anon;
 revoke delete on public.customers from authenticated, anon;
 revoke insert, update, delete on public.app_settings from anon;
 
@@ -927,10 +988,161 @@ revoke insert, update, delete on public.app_settings from anon;
 -- 10. REGRAS DE NEGÓCIO (transacionais)
 -- ============================================================================
 
+-- ---- 10.0 create_movement --------------------------------------------------------------------
+-- Lançamento manual de estoque (entrada, saída, ajuste — venda NUNCA passa por aqui).
+-- Para item com track_serial: p_serials é obrigatório e vira a própria quantidade (uma unidade
+-- = um número de série); em entrada/ajuste-aumenta cadastra os seriais novos, em saída/
+-- ajuste-diminui exige que cada serial esteja em estoque e baixa exatamente essas unidades.
+-- Assinatura mudou (ganhou p_supplier_id): descarta a versão antiga pra não sobrepor.
+drop function if exists public.create_movement(text, uuid, numeric, text, numeric, text, boolean, jsonb);
+
+create or replace function public.create_movement(
+  p_type text,
+  p_item_id uuid,
+  p_quantity numeric,
+  p_subtype text default null,
+  p_unit_value numeric default null,
+  p_reason text default null,
+  p_adjustment_increases_stock boolean default null,
+  p_serials jsonb default null,
+  p_supplier_id uuid default null    -- só entrada: de quem veio. Uma vez informado, o item "lembra".
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_item public.items%rowtype;
+  v_serials text[];
+  v_serial text;
+  v_is_decrease boolean;
+  v_quantity numeric(12,3);
+  v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
+  v_movement_id uuid;
+begin
+  if not public.is_manager() then
+    raise exception 'Apenas gerente, administrador ou CEO podem lançar movimentações de estoque.'
+      using errcode = 'P0001', hint = 'FORBIDDEN';
+  end if;
+
+  if p_type not in ('entrada', 'saida', 'ajuste') then
+    raise exception 'Tipo de movimentação inválido.' using errcode = 'P0001', hint = 'INVALID_TYPE';
+  end if;
+  if p_type in ('entrada', 'saida') and coalesce(p_subtype, '') = '' then
+    raise exception 'Informe o motivo da movimentação.' using errcode = 'P0001', hint = 'SUBTYPE_REQUIRED';
+  end if;
+  if coalesce(p_subtype, '') in ('venda', 'cancelamento', 'troca') then
+    raise exception 'Esse tipo de movimentação só pode nascer de uma venda.' using errcode = 'P0001', hint = 'FORBIDDEN';
+  end if;
+  if p_type = 'ajuste' then
+    if p_adjustment_increases_stock is null then
+      raise exception 'Informe a direção do ajuste.' using errcode = 'P0001', hint = 'INVALID_DIRECTION';
+    end if;
+    if v_reason is null then
+      raise exception 'Motivo é obrigatório para ajuste.' using errcode = 'P0001', hint = 'REASON_REQUIRED';
+    end if;
+  end if;
+  if p_type = 'saida' and p_subtype = 'perda' and v_reason is null then
+    raise exception 'Motivo da perda é obrigatório.' using errcode = 'P0001', hint = 'REASON_REQUIRED';
+  end if;
+
+  select * into v_item from public.items where id = p_item_id for update;
+  if not found then
+    raise exception 'Produto não encontrado.' using errcode = 'P0001', hint = 'PRODUCT_NOT_FOUND';
+  end if;
+
+  if p_supplier_id is not null and not exists (select 1 from public.suppliers where id = p_supplier_id) then
+    raise exception 'Fornecedor não encontrado.' using errcode = 'P0001', hint = 'SUPPLIER_NOT_FOUND';
+  end if;
+  -- "Compra" pede fornecedor uma vez só: se o item já lembra de qual foi, não precisa perguntar de novo.
+  if p_type = 'entrada' and p_subtype = 'compra' and v_item.supplier_id is null and p_supplier_id is null then
+    raise exception 'Informe o fornecedor dessa compra.' using errcode = 'P0001', hint = 'SUPPLIER_REQUIRED';
+  end if;
+
+  v_is_decrease := p_type = 'saida' or (p_type = 'ajuste' and not p_adjustment_increases_stock);
+
+  if v_item.track_serial then
+    if p_serials is null or jsonb_typeof(p_serials) <> 'array' then
+      raise exception 'Informe os números de série de %.', v_item.name using errcode = 'P0001', hint = 'SERIALS_REQUIRED';
+    end if;
+    select array_agg(distinct nullif(btrim(s), '')) into v_serials from jsonb_array_elements_text(p_serials) s;
+    v_serials := array_remove(v_serials, null);
+    if coalesce(array_length(v_serials, 1), 0) = 0 then
+      raise exception 'Informe os números de série de %.', v_item.name using errcode = 'P0001', hint = 'SERIALS_REQUIRED';
+    end if;
+    if jsonb_array_length(p_serials) <> array_length(v_serials, 1) then
+      raise exception 'Número de série repetido ou em branco na lista.' using errcode = 'P0001', hint = 'SERIAL_DUPLICATE';
+    end if;
+    v_quantity := array_length(v_serials, 1);
+
+    if v_is_decrease then
+      for v_serial in select unnest(v_serials) loop
+        if not exists (
+          select 1 from public.item_serials
+           where item_id = v_item.id and serial = v_serial and status = 'estoque'
+           for update
+        ) then
+          raise exception 'Número de série % não está disponível em estoque para %.', v_serial, v_item.name
+            using errcode = 'P0001', hint = 'SERIAL_NOT_AVAILABLE';
+        end if;
+      end loop;
+    else
+      for v_serial in select unnest(v_serials) loop
+        if exists (select 1 from public.item_serials where serial = v_serial) then
+          raise exception 'Número de série % já está cadastrado.', v_serial
+            using errcode = 'P0001', hint = 'SERIAL_DUPLICATE';
+        end if;
+      end loop;
+    end if;
+  else
+    if coalesce(p_quantity, 0) <= 0 then
+      raise exception 'Quantidade deve ser maior que zero.' using errcode = 'P0001', hint = 'INVALID_QUANTITY';
+    end if;
+    v_quantity := p_quantity;
+  end if;
+
+  if v_is_decrease and v_quantity > v_item.quantity then
+    raise exception 'Estoque insuficiente para %: disponível %, solicitado %.',
+      v_item.name, trim_scale(v_item.quantity), trim_scale(v_quantity)
+      using errcode = 'P0001', hint = 'INSUFFICIENT_STOCK';
+  end if;
+
+  insert into public.movements (item_id, type, subtype, quantity, unit_value, reason,
+                                adjustment_increases_stock, source_channel, created_by)
+  values (p_item_id, p_type, nullif(p_subtype, ''), v_quantity, p_unit_value, v_reason,
+          case when p_type = 'ajuste' then p_adjustment_increases_stock else null end, 'web', v_uid)
+  returning id into v_movement_id;
+
+  if v_item.track_serial then
+    if v_is_decrease then
+      update public.item_serials
+         set status = 'baixado', movement_out_id = v_movement_id, removed_at = now()
+       where item_id = v_item.id and serial = any(v_serials) and status = 'estoque';
+    else
+      insert into public.item_serials (item_id, serial, status, movement_in_id, created_by)
+      select v_item.id, s, 'estoque', v_movement_id, v_uid from unnest(v_serials) s;
+    end if;
+  end if;
+
+  -- Lembra o fornecedor pro item: só pergunta de novo se alguém escolher um diferente.
+  if p_type = 'entrada' and p_supplier_id is not null and p_supplier_id is distinct from v_item.supplier_id then
+    update public.items set supplier_id = p_supplier_id, updated_at = now() where id = v_item.id;
+  end if;
+
+  return jsonb_build_object('movement_id', v_movement_id, 'quantity', v_quantity);
+end;
+$$;
+
 -- ---- 10.1 create_sale ------------------------------------------------------------------------
 -- Uma única transação: valida → trava produtos → calcula → grava venda, itens, pagamento,
 -- movimentações (que baixam o estoque) → auditoria → evento de notificação.
 -- Se qualquer passo falhar, NADA é gravado.
+-- Assinatura mudou (ganhou p_trade_in): descarta a versão antiga pra não sobrepor (Postgres trata
+-- listas de parâmetros diferentes como funções distintas, não como substituição).
+drop function if exists public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text);
+
 create or replace function public.create_sale(
   p_idempotency_key uuid,
   p_customer_id uuid,
@@ -940,7 +1152,8 @@ create or replace function public.create_sale(
   p_installments integer default 1,
   p_interest_percent numeric default 0,-- juros cobrado do cliente (só credito_parcelado)
   p_card_brand text default null,
-  p_notes text default null
+  p_notes text default null,
+  p_trade_in jsonb default null        -- { "item_name": text, "category": text|null, "value": n } | null
 )
 returns jsonb
 language plpgsql
@@ -954,7 +1167,9 @@ declare
   v_customer_name text;
   v_elem jsonb;
   v_req record;
+  v_serial text;
   v_item public.items%rowtype;
+  v_sale_item_id uuid;
   v_lines jsonb := '[]'::jsonb;
   v_line_total numeric(12,2);
   v_subtotal numeric(12,2) := 0;
@@ -976,6 +1191,10 @@ declare
   v_sale_id uuid;
   v_number bigint;
   v_stock jsonb := '[]'::jsonb;
+  v_ti_name text;
+  v_ti_category text;
+  v_ti_value numeric(12,2) := 0;
+  v_ti_item_id uuid;
 begin
   -- Quem vende vem SEMPRE da sessão autenticada, nunca do navegador.
   if v_uid is null then
@@ -1015,12 +1234,31 @@ begin
     if coalesce(v_elem ->> 'quantity', '') !~ '^[0-9]+(\.[0-9]{1,3})?$' or (v_elem ->> 'quantity')::numeric <= 0 then
       raise exception 'Quantidade inválida no carrinho.' using errcode = 'P0001', hint = 'INVALID_QUANTITY';
     end if;
+    if v_elem ? 'serials' and jsonb_typeof(v_elem -> 'serials') <> 'array' then
+      raise exception 'Números de série inválidos no carrinho.' using errcode = 'P0001', hint = 'INVALID_ITEM';
+    end if;
   end loop;
 
   if p_customer_id is not null then
     select name into v_customer_name from public.customers where id = p_customer_id and active;
     if not found then
       raise exception 'Cliente não encontrado ou inativo.' using errcode = 'P0001', hint = 'CUSTOMER_NOT_FOUND';
+    end if;
+  end if;
+
+  -- Entrada (troca): produto que o cliente entregou como parte do pagamento.
+  if p_trade_in is not null then
+    v_ti_name := btrim(coalesce(p_trade_in ->> 'item_name', ''));
+    v_ti_category := nullif(btrim(coalesce(p_trade_in ->> 'category', '')), '');
+    if coalesce(p_trade_in ->> 'value', '') !~ '^[0-9]+(\.[0-9]{1,2})?$' then
+      raise exception 'Informe o valor do produto recebido de entrada.' using errcode = 'P0001', hint = 'TRADE_IN_VALUE_REQUIRED';
+    end if;
+    v_ti_value := round((p_trade_in ->> 'value')::numeric, 2);
+    if v_ti_name = '' then
+      raise exception 'Informe o nome do produto recebido de entrada.' using errcode = 'P0001', hint = 'TRADE_IN_ITEM_REQUIRED';
+    end if;
+    if v_ti_value <= 0 then
+      raise exception 'Informe o valor do produto recebido de entrada.' using errcode = 'P0001', hint = 'TRADE_IN_VALUE_REQUIRED';
     end if;
   end if;
 
@@ -1058,9 +1296,15 @@ begin
   -- Trava as linhas dos produtos SEMPRE em ordem de id: sem deadlock e sem vender a mesma
   -- unidade para dois vendedores ao mesmo tempo.
   for v_req in
-    select (e ->> 'item_id')::uuid as item_id, sum((e ->> 'quantity')::numeric(12,3)) as qty
-      from jsonb_array_elements(p_items) e
-     group by 1 order by 1
+    select item_id, sum(qty) as qty, coalesce(array_agg(serial) filter (where serial is not null), '{}') as serials
+      from (
+        select (e ->> 'item_id')::uuid as item_id, (e ->> 'quantity')::numeric(12,3) as qty, null::text as serial
+          from jsonb_array_elements(p_items) e
+        union all
+        select (e ->> 'item_id')::uuid, 0, jsonb_array_elements_text(coalesce(e -> 'serials', '[]'::jsonb))
+          from jsonb_array_elements(p_items) e
+      ) x
+     group by item_id order by item_id
   loop
     select * into v_item from public.items where id = v_req.item_id for update;
     if not found then
@@ -1078,6 +1322,26 @@ begin
         using errcode = 'P0001', hint = 'INSUFFICIENT_STOCK';
     end if;
 
+    if v_item.track_serial then
+      if v_req.qty <> coalesce(array_length(v_req.serials, 1), 0) then
+        raise exception 'Bipe um número de série para cada unidade de %: esperado %, recebido %.',
+          v_item.name, trim_scale(v_req.qty), coalesce(array_length(v_req.serials, 1), 0)
+          using errcode = 'P0001', hint = 'SERIAL_COUNT_MISMATCH';
+      end if;
+      for v_serial in select unnest(v_req.serials) loop
+        if not exists (
+          select 1 from public.item_serials
+           where item_id = v_item.id and serial = v_serial and status = 'estoque'
+           for update
+        ) then
+          raise exception 'Número de série % não está disponível em estoque para %.', v_serial, v_item.name
+            using errcode = 'P0001', hint = 'SERIAL_NOT_AVAILABLE';
+        end if;
+      end loop;
+    elsif coalesce(array_length(v_req.serials, 1), 0) > 0 then
+      raise exception '% não usa número de série.', v_item.name using errcode = 'P0001', hint = 'SERIAL_NOT_APPLICABLE';
+    end if;
+
     -- O preço vem do banco (nunca do navegador).
     v_line_total := round(v_item.sale_price * v_req.qty, 2);
     v_subtotal := v_subtotal + v_line_total;
@@ -1085,7 +1349,8 @@ begin
       'item_id', v_item.id, 'name', v_item.name, 'sku', v_item.sku, 'barcode', v_item.barcode,
       'unit', v_item.unit, 'quantity', v_req.qty, 'unit_price', v_item.sale_price,
       'unit_cost', v_item.cost_price, 'line_total', v_line_total,
-      'stock_before', v_item.quantity, 'stock_after', v_item.quantity - v_req.qty);
+      'stock_before', v_item.quantity, 'stock_after', v_item.quantity - v_req.qty,
+      'serials', to_jsonb(v_req.serials));
   end loop;
 
   -- Desconto: validado contra o limite do perfil de quem vende.
@@ -1100,8 +1365,8 @@ begin
       using errcode = 'P0001', hint = 'DISCOUNT_NOT_ALLOWED';
   end if;
 
-  -- Totais: subtotal − desconto + juros. "Valor da venda" e "valor pago pelo cliente" são
-  -- coisas diferentes e ficam separados (subtotal, discount_amount, interest_amount, total).
+  -- Totais: subtotal − desconto + juros − entrada. "Valor da venda" e "valor pago pelo cliente" são
+  -- coisas diferentes e ficam separados (subtotal, discount_amount, interest_amount, trade_in_amount, total).
   v_base := v_subtotal - v_discount;
   if v_base <= 0 then
     raise exception 'O total da venda precisa ser maior que zero.' using errcode = 'P0001', hint = 'INVALID_TOTAL';
@@ -1109,7 +1374,11 @@ begin
   if v_method = 'credito_parcelado' then
     v_interest := round(v_base * v_interest_pct / 100, 2);
   end if;
-  v_total := v_base + v_interest;
+  if v_ti_value > 0 and v_ti_value >= v_base + v_interest then
+    raise exception 'O valor de entrada não pode ser maior ou igual ao total da venda.'
+      using errcode = 'P0001', hint = 'TRADE_IN_EXCEEDS_TOTAL';
+  end if;
+  v_total := v_base + v_interest - v_ti_value;
 
   -- Taxa da operadora (custo da loja): vem de card_fee_rates.
   if v_is_card then
@@ -1127,8 +1396,8 @@ begin
 
   -- Grava
   insert into public.sales (idempotency_key, seller_id, customer_id, subtotal, discount_amount,
-                            interest_amount, total, notes)
-  values (p_idempotency_key, v_uid, p_customer_id, v_subtotal, v_discount, v_interest, v_total,
+                            interest_amount, trade_in_amount, total, notes)
+  values (p_idempotency_key, v_uid, p_customer_id, v_subtotal, v_discount, v_interest, v_ti_value, v_total,
           nullif(btrim(p_notes), ''))
   returning id, number into v_sale_id, v_number;
 
@@ -1142,7 +1411,8 @@ begin
                                    unit_price, unit_cost, line_total)
     values (v_sale_id, (v_elem ->> 'item_id')::uuid, v_elem ->> 'name', v_elem ->> 'sku',
             v_elem ->> 'barcode', (v_elem ->> 'quantity')::numeric, (v_elem ->> 'unit_price')::numeric,
-            (v_elem ->> 'unit_cost')::numeric, (v_elem ->> 'line_total')::numeric);
+            (v_elem ->> 'unit_cost')::numeric, (v_elem ->> 'line_total')::numeric)
+    returning id into v_sale_item_id;
 
     -- O trigger do ledger (8.2) baixa o estoque e dispara LOW_STOCK / OUT_OF_STOCK na virada.
     insert into public.movements (item_id, type, subtype, quantity, unit_value, reason,
@@ -1150,14 +1420,40 @@ begin
     values ((v_elem ->> 'item_id')::uuid, 'saida', 'venda', (v_elem ->> 'quantity')::numeric,
             (v_elem ->> 'unit_price')::numeric, 'Venda #' || public.sale_code(v_number), 'web', v_uid, v_sale_id);
 
+    if jsonb_array_length(coalesce(v_elem -> 'serials', '[]'::jsonb)) > 0 then
+      update public.item_serials
+         set status = 'vendido', sale_item_id = v_sale_item_id, sold_at = now()
+       where item_id = (v_elem ->> 'item_id')::uuid
+         and serial = any (select jsonb_array_elements_text(v_elem -> 'serials'))
+         and status = 'estoque';
+    end if;
+
     v_stock := v_stock || jsonb_build_object('item_id', v_elem -> 'item_id', 'name', v_elem -> 'name',
                                              'before', v_elem -> 'stock_before', 'after', v_elem -> 'stock_after');
   end loop;
 
+  -- Entrada (troca): cadastra o produto recebido como seminovo e dá entrada de 1 unidade,
+  -- vinculada a esta venda. custo = valor da entrada (é o que a loja "pagou" por ele).
+  if v_ti_value > 0 then
+    insert into public.items (name, category, condition, cost_price, active, created_by)
+    values (v_ti_name, v_ti_category, 'seminovo', v_ti_value, true, v_uid)
+    returning id into v_ti_item_id;
+
+    insert into public.movements (item_id, type, subtype, quantity, unit_value, reason,
+                                  source_channel, created_by, sale_id)
+    values (v_ti_item_id, 'entrada', 'troca', 1, v_ti_value,
+            'Recebido como entrada na venda #' || public.sale_code(v_number), 'web', v_uid, v_sale_id);
+
+    update public.sales set trade_in_item_id = v_ti_item_id where id = v_sale_id;
+  end if;
+
   perform public.audit_write('sale.created', 'sale', v_sale_id::text,
     jsonb_build_object('number', v_number, 'total', v_total, 'subtotal', v_subtotal,
                        'discount', v_discount, 'interest', v_interest, 'method', v_method,
-                       'installments', v_installments, 'items', v_lines));
+                       'installments', v_installments, 'items', v_lines,
+                       'trade_in', case when v_ti_value > 0 then
+                         jsonb_build_object('item_id', v_ti_item_id, 'name', v_ti_name, 'value', v_ti_value)
+                       else null end));
 
   perform public.enqueue_notification('SALE_COMPLETED', 'sale', v_sale_id::text,
     'SALE_COMPLETED:' || v_sale_id,
@@ -1165,7 +1461,9 @@ begin
       'sale_id', v_sale_id, 'code', public.sale_code(v_number),
       'seller', v_emp.full_name, 'customer', v_customer_name,
       'items', v_lines, 'stock', v_stock,
-      'subtotal', v_subtotal, 'discount', v_discount, 'interest', v_interest, 'total', v_total,
+      'subtotal', v_subtotal, 'discount', v_discount, 'interest', v_interest,
+      'trade_in', case when v_ti_value > 0 then jsonb_build_object('name', v_ti_name, 'value', v_ti_value) else null end,
+      'total', v_total,
       'payment', jsonb_build_object('method', v_method, 'installments', v_installments,
                                     'installment_value', round(v_total / v_installments, 2),
                                     'interest_percent', v_interest_pct, 'card_brand', v_brand,
@@ -1192,6 +1490,7 @@ declare
   v_sale public.sales%rowtype;
   v_reason text := btrim(coalesce(p_reason, ''));
   v_si public.sale_items%rowtype;
+  v_ti_item public.items%rowtype;
   v_seller text;
   v_customer text;
   v_items jsonb := '[]'::jsonb;
@@ -1218,6 +1517,7 @@ begin
 
   perform 1 from public.items
    where id in (select item_id from public.sale_items where sale_id = p_sale_id)
+      or id = v_sale.trade_in_item_id
    order by id for update;
 
   for v_si in select * from public.sale_items where sale_id = p_sale_id order by item_id loop
@@ -1226,8 +1526,31 @@ begin
     values (v_si.item_id, 'entrada', 'cancelamento', v_si.quantity, v_si.unit_price,
             'Cancelamento da venda #' || public.sale_code(v_sale.number) || ': ' || v_reason,
             'web', v_uid, v_sale.id);
+
+    -- Devolve ao estoque os números de série vendidos nesse item (cancelamento é sempre total:
+    -- só é permitido quando a venda ainda não teve nenhuma devolução).
+    update public.item_serials
+       set status = 'estoque', sale_item_id = null, sold_at = null
+     where sale_item_id = v_si.id and status = 'vendido';
+
     v_items := v_items || jsonb_build_object('name', v_si.item_name, 'quantity', v_si.quantity);
   end loop;
+
+  -- Entrada (troca): tira do estoque o produto que o cliente tinha entregado — a menos que já
+  -- tenha sido revendido, caso em que o cancelamento é bloqueado (não dá pra desfazer sem rastro).
+  if v_sale.trade_in_item_id is not null then
+    select * into v_ti_item from public.items where id = v_sale.trade_in_item_id;
+    if v_ti_item.quantity < 1 then
+      raise exception 'Não é possível cancelar: o produto recebido de entrada (%) já foi revendido.', v_ti_item.name
+        using errcode = 'P0001', hint = 'TRADE_IN_ALREADY_SOLD';
+    end if;
+    insert into public.movements (item_id, type, subtype, quantity, unit_value, reason,
+                                  source_channel, created_by, sale_id)
+    values (v_ti_item.id, 'saida', 'outros', 1, v_sale.trade_in_amount,
+            'Cancelamento da venda #' || public.sale_code(v_sale.number) || ': ' || v_reason,
+            'web', v_uid, v_sale.id);
+    update public.items set active = false, updated_at = now() where id = v_ti_item.id;
+  end if;
 
   update public.sales
      set status = 'cancelada', cancelled_at = now(), cancelled_by = v_uid, cancel_reason = v_reason,
@@ -1270,6 +1593,8 @@ declare
   v_reason text := btrim(coalesce(p_reason, ''));
   v_req record;
   v_si public.sale_items%rowtype;
+  v_track_serial boolean;
+  v_serial text;
   v_refund numeric(12,2) := 0;
   v_returned jsonb := '[]'::jsonb;
   v_all_returned boolean;
@@ -1310,9 +1635,15 @@ begin
    order by id for update;
 
   for v_req in
-    select (e ->> 'sale_item_id')::uuid as sale_item_id, sum((e ->> 'quantity')::numeric(12,3)) as qty
-      from jsonb_array_elements(p_items) e
-     group by 1 order by 1
+    select sale_item_id, sum(qty) as qty, coalesce(array_agg(serial) filter (where serial is not null), '{}') as serials
+      from (
+        select (e ->> 'sale_item_id')::uuid as sale_item_id, (e ->> 'quantity')::numeric(12,3) as qty, null::text as serial
+          from jsonb_array_elements(p_items) e
+        union all
+        select (e ->> 'sale_item_id')::uuid, 0, jsonb_array_elements_text(coalesce(e -> 'serials', '[]'::jsonb))
+          from jsonb_array_elements(p_items) e
+      ) x
+     group by sale_item_id order by sale_item_id
   loop
     select * into v_si from public.sale_items where id = v_req.sale_item_id and sale_id = p_sale_id for update;
     if not found then
@@ -1322,6 +1653,26 @@ begin
       raise exception 'Quantidade a devolver de % excede o que foi vendido e ainda não devolvido (%).',
         v_si.item_name, trim_scale(v_si.quantity - v_si.returned_quantity)
         using errcode = 'P0001', hint = 'INVALID_QUANTITY';
+    end if;
+
+    select track_serial into v_track_serial from public.items where id = v_si.item_id;
+    if v_track_serial then
+      if v_req.qty <> coalesce(array_length(v_req.serials, 1), 0) then
+        raise exception 'Selecione um número de série para cada unidade devolvida de %: esperado %, recebido %.',
+          v_si.item_name, trim_scale(v_req.qty), coalesce(array_length(v_req.serials, 1), 0)
+          using errcode = 'P0001', hint = 'SERIAL_COUNT_MISMATCH';
+      end if;
+      for v_serial in select unnest(v_req.serials) loop
+        update public.item_serials
+           set status = 'estoque', sale_item_id = null, sold_at = null
+         where serial = v_serial and item_id = v_si.item_id and sale_item_id = v_si.id and status = 'vendido';
+        if not found then
+          raise exception 'Número de série % não está vendido nesse item dessa venda.', v_serial
+            using errcode = 'P0001', hint = 'SERIAL_NOT_SOLD_HERE';
+        end if;
+      end loop;
+    elsif coalesce(array_length(v_req.serials, 1), 0) > 0 then
+      raise exception '% não usa número de série.', v_si.item_name using errcode = 'P0001', hint = 'SERIAL_NOT_APPLICABLE';
     end if;
 
     insert into public.movements (item_id, type, subtype, quantity, unit_value, reason,
@@ -1515,11 +1866,13 @@ grant  execute on function public.notification_mark_sent(uuid)                  
 grant  execute on function public.notification_mark_failed(uuid, text, boolean)   to service_role;
 grant  execute on function public.notification_retry(uuid)                        to authenticated;
 
--- Regras de venda: só usuário logado (a função ainda confere perfil/permissão por dentro).
-revoke execute on function public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text) from public, anon;
+-- Regras de venda e de movimentação: só usuário logado (a função ainda confere perfil por dentro).
+revoke execute on function public.create_movement(text, uuid, numeric, text, numeric, text, boolean, jsonb, uuid) from public, anon;
+grant  execute on function public.create_movement(text, uuid, numeric, text, numeric, text, boolean, jsonb, uuid) to authenticated;
+revoke execute on function public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text, jsonb) from public, anon;
 revoke execute on function public.cancel_sale(uuid, text)                          from public, anon;
 revoke execute on function public.return_sale_items(uuid, jsonb, text, uuid)       from public, anon;
-grant  execute on function public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text) to authenticated;
+grant  execute on function public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text, jsonb) to authenticated;
 grant  execute on function public.cancel_sale(uuid, text)                          to authenticated;
 grant  execute on function public.return_sale_items(uuid, jsonb, text, uuid)       to authenticated;
 grant  execute on function public.sales_revenue(timestamptz, timestamptz)          to authenticated;

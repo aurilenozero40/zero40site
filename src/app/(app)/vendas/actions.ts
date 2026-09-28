@@ -19,6 +19,7 @@ export interface ProductHit {
   unit: string;
   sale_price: number | null;
   quantity: number;
+  track_serial: boolean;
   /** como achamos: código de barras/SKU exatos valem para "bipar e adicionar" */
   match: "barcode" | "sku" | "name";
 }
@@ -55,7 +56,7 @@ export async function searchProductsAction(rawQuery: string): Promise<ProductHit
   const q = rawQuery.trim().slice(0, 80);
   if (q.length === 0) return [];
 
-  const columns = "id, name, sku, barcode, unit, sale_price, quantity";
+  const columns = "id, name, sku, barcode, unit, sale_price, quantity, track_serial";
   const digits = /^\d+$/.test(q);
   // Só consulta código de barras quando o texto PARECE um código (sem espaço/aspas/parênteses):
   // evita que texto livre do usuário vire parte da sintaxe do filtro `in`.
@@ -81,6 +82,19 @@ export async function searchProductsAction(rawQuery: string): Promise<ProductHit
   add(bySku.data, "sku");
   add(byName.data, "name");
   return [...hits.values()].slice(0, 10);
+}
+
+/** Confere um número de série bipado antes de adicionar ao carrinho (item certo e em estoque). */
+export async function verifySerialAction(itemId: string, serial: string): Promise<ActionResult> {
+  const { supabase } = await requireEmployee();
+  const s = serial.trim();
+  if (!s) return { ok: false, error: "Bipe o número de série." };
+
+  const { data } = await supabase.from("item_serials").select("item_id, status").eq("serial", s).maybeSingle();
+  if (!data) return { ok: false, error: `Número de série ${s} não encontrado no estoque.` };
+  if (data.item_id !== itemId) return { ok: false, error: `Número de série ${s} pertence a outro produto.` };
+  if (data.status !== "estoque") return { ok: false, error: `Número de série ${s} já foi vendido ou baixado.` };
+  return { ok: true, data: undefined };
 }
 
 export async function searchCustomersAction(rawQuery: string): Promise<CustomerHit[]> {
@@ -136,13 +150,14 @@ export async function createSaleAction(input: unknown): Promise<ActionResult<Sal
   const { data, error } = await supabase.rpc("create_sale", {
     p_idempotency_key: s.idempotencyKey,
     p_customer_id: s.customerId ?? null,
-    p_items: s.items.map((i) => ({ item_id: i.itemId, quantity: i.quantity })),
+    p_items: s.items.map((i) => ({ item_id: i.itemId, quantity: i.quantity, serials: i.serials ?? [] })),
     p_discount_amount: s.discountAmount,
     p_payment_method: s.paymentMethod,
     p_installments: s.installments,
     p_interest_percent: s.interestPercent,
     p_card_brand: s.cardBrand ?? null,
     p_notes: s.notes ?? null,
+    p_trade_in: s.tradeIn ? { item_name: s.tradeIn.itemName, category: s.tradeIn.category ?? null, value: s.tradeIn.value } : null,
   });
   if (error) return { ok: false, error: friendlyRpcError(error) };
 
@@ -176,7 +191,7 @@ export async function returnSaleItemsAction(input: unknown): Promise<ActionResul
 
   const { data, error } = await supabase.rpc("return_sale_items", {
     p_sale_id: r.saleId,
-    p_items: r.items.map((i) => ({ sale_item_id: i.saleItemId, quantity: i.quantity })),
+    p_items: r.items.map((i) => ({ sale_item_id: i.saleItemId, quantity: i.quantity, serials: i.serials ?? [] })),
     p_reason: r.reason,
     p_idempotency_key: r.idempotencyKey,
   });

@@ -7,7 +7,14 @@ import { ItemForm } from "@/components/items/ItemForm";
 import { MovementsTable } from "@/components/movements/MovementsTable";
 import { formatCurrency, formatDate, formatQuantity } from "@/lib/utils";
 import { updateItem, toggleItemActive } from "../actions";
-import type { AuditLog, Item, MovementWithRelations, Supplier } from "@/lib/types";
+import type { AuditLog, Item, ItemSerial, MovementWithRelations, Supplier } from "@/lib/types";
+
+const SERIAL_STATUS_LABEL: Record<string, string> = { estoque: "Em estoque", vendido: "Vendido", baixado: "Baixado" };
+const SERIAL_STATUS_CLASS: Record<string, string> = {
+  estoque: "bg-success/10 text-success",
+  vendido: "bg-accent/10 text-accent",
+  baixado: "bg-muted/20 text-muted",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +38,7 @@ const FIELD_LABEL: Record<string, string> = {
   description: "Descrição",
   category: "Categoria",
   manufacturer: "Marca",
+  track_serial: "Usa número de série",
 };
 
 const fmt = (field: string, v: unknown) =>
@@ -56,6 +64,7 @@ export default async function ItemDetailPage({
     { data: suppliers, error: suppliersError },
     { data: movements, error: movementsError },
     { data: history },
+    { data: serials },
   ] = await Promise.all([
     supabase.from("items").select("*").eq("id", id).single(),
     supabase.from("suppliers").select("*").order("name"),
@@ -67,6 +76,7 @@ export default async function ItemDetailPage({
       .limit(50),
     // quem mexeu neste produto (RLS: só gerente+ enxerga a auditoria)
     supabase.from("audit_logs").select("*").eq("entity_type", "item").eq("entity_id", id).order("created_at", { ascending: false }).limit(20),
+    supabase.from("item_serials").select("*").eq("item_id", id).order("created_at", { ascending: false }).limit(500),
   ]);
 
   if (itemError)
@@ -97,6 +107,9 @@ export default async function ItemDetailPage({
           </Link>
           <h1 className="text-xl font-semibold text-foreground">
             {it.name}
+            {it.condition === "seminovo" && (
+              <span className="ml-2 rounded-full bg-warning/10 px-2 py-0.5 text-sm font-medium text-warning">Seminovo</span>
+            )}
             {!it.active && <span className="ml-2 text-sm font-normal text-muted">(inativo)</span>}
           </h1>
         </div>
@@ -165,6 +178,41 @@ export default async function ItemDetailPage({
                 {(!history || history.length === 0) && (
                   <tr>
                     <td colSpan={3} className="px-4 py-6 text-center text-muted">Sem alterações registradas.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {it.track_serial && (
+        <div className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-foreground">Números de série</h2>
+          <div className="card overflow-x-auto p-0">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">
+                  <th className="px-4 py-3">Número de série</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Entrou em</th>
+                </tr>
+              </thead>
+              <tbody>
+                {((serials as ItemSerial[]) ?? []).map((s) => (
+                  <tr key={s.id} className="border-b border-border last:border-0">
+                    <td className="px-4 py-3 font-mono text-xs text-foreground">{s.serial}</td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${SERIAL_STATUS_CLASS[s.status]}`}>
+                        {SERIAL_STATUS_LABEL[s.status] ?? s.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-muted">{formatDate(s.created_at, true)}</td>
+                  </tr>
+                ))}
+                {(!serials || serials.length === 0) && (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-6 text-center text-muted">Nenhum número de série cadastrado ainda.</td>
                   </tr>
                 )}
               </tbody>

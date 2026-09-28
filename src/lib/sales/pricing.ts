@@ -44,6 +44,8 @@ export interface PricingInput {
   method: PaymentMethod;
   installments: number;
   interestPercent: number;
+  /** valor do produto recebido como entrada (troca) — abate o total, fora do limite de desconto */
+  tradeInCents?: number;
 }
 
 export interface PricingResult {
@@ -52,7 +54,8 @@ export interface PricingResult {
   /** subtotal − desconto (o "valor da venda", antes de juros) */
   baseCents: number;
   interestCents: number;
-  /** o que o cliente paga: base + juros */
+  tradeInCents: number;
+  /** o que o cliente paga: base + juros − entrada */
   totalCents: number;
   /** valor de cada parcela (total ÷ parcelas) */
   installmentCents: number;
@@ -62,13 +65,15 @@ export function computeSaleTotals(input: PricingInput): PricingResult {
   const baseCents = input.subtotalCents - input.discountCents;
   const interestCents =
     input.method === "credito_parcelado" ? percentOfCents(baseCents, input.interestPercent) : 0;
-  const totalCents = baseCents + interestCents;
+  const tradeInCents = input.tradeInCents ?? 0;
+  const totalCents = baseCents + interestCents - tradeInCents;
   const installments = input.method === "credito_parcelado" ? Math.max(1, input.installments) : 1;
   return {
     subtotalCents: input.subtotalCents,
     discountCents: input.discountCents,
     baseCents,
     interestCents,
+    tradeInCents,
     totalCents,
     installmentCents: divRound(totalCents, installments),
   };

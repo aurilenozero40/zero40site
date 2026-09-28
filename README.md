@@ -17,6 +17,16 @@ Vendedor → Nova venda (bipa o código de barras) → Confirma
 
 - **O banco é a fonte da verdade.** O navegador só manda a intenção (produtos, quantidades, forma de pagamento);
   preço, desconto permitido, juros e taxa da operadora são calculados/validados no Postgres.
+- **Produto com número de série (IMEI etc.):** marque "usa número de série" no cadastro do item. Na entrada de
+  estoque e na venda, o fluxo vira bipar o código de barras do produto e, em seguida, o número de série de cada
+  unidade — cada serial fica com status próprio (estoque/vendido/baixado) e volta ao estoque em cancelamento/devolução.
+- **Entrada (troca):** no PDV, "Recebeu algo de entrada?" registra o produto usado que o cliente entregou e o
+  valor abate o total da venda (fora do limite de desconto do vendedor). O produto entra automaticamente no
+  estoque como **seminovo** (`condition`), com custo = valor da entrada; o gerente define o preço de venda depois.
+  Cancelar a venda tira esse produto do estoque de novo — a menos que já tenha sido revendido.
+- **Fornecedor na entrada de estoque:** numa **compra**, o gerente escolhe o fornecedor uma vez — o produto
+  "lembra" (`items.supplier_id`) e as próximas compras dele já vêm com o fornecedor preenchido, sem perguntar
+  de novo (só troca se quiser). Cadastra fornecedor novo direto na tela, sem precisar de outra tela.
 - **Duas pessoas vendendo a última unidade:** as linhas dos produtos são travadas; só uma consegue.
 - **Retry/duplo clique não duplica nada:** cada venda tem uma chave de idempotência.
 - **Telegram fora do ar não desfaz a venda:** o evento fica `pendente` na fila e é reenviado (com espera crescente).

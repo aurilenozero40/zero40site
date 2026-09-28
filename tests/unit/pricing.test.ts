@@ -41,6 +41,16 @@ describe("pricing", () => {
     expect(r.totalCents).toBe(110000);
   });
 
+  it("entrada (troca) abate o total mas não existe quando tradeInCents é omitido", () => {
+    const sem = computeSaleTotals({ subtotalCents: 100000, discountCents: 0, method: "pix", installments: 1, interestPercent: 0 });
+    expect(sem.tradeInCents).toBe(0);
+    expect(sem.totalCents).toBe(100000);
+
+    const com = computeSaleTotals({ subtotalCents: 100000, discountCents: 0, method: "pix", installments: 1, interestPercent: 0, tradeInCents: 30000 });
+    expect(com.tradeInCents).toBe(30000);
+    expect(com.totalCents).toBe(70000);
+  });
+
   it("arredonda meio para cima, em centavos, sem erro de ponto flutuante", () => {
     expect(lineTotalCents(3333, 3)).toBe(9999);
     expect(lineTotalCents(1999, 0.5)).toBe(1000); // 999,5 → 1000

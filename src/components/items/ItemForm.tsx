@@ -6,6 +6,7 @@ import type { Item, Supplier } from "@/lib/types";
 import type { ActionState } from "@/app/(app)/itens/actions";
 
 const UNITS = ["un", "cx", "kg", "m", "l", "par"];
+const BRAND_SUGGESTIONS = ["Garmin", "Coros", "Shokz", "Wahoo"];
 
 export function ItemForm({
   action,
@@ -98,8 +99,14 @@ export function ItemForm({
             id="manufacturer"
             name="manufacturer"
             className="input"
+            list="brand_suggestions"
             defaultValue={item?.manufacturer ?? ""}
           />
+          <datalist id="brand_suggestions">
+            {BRAND_SUGGESTIONS.map((b) => (
+              <option key={b} value={b} />
+            ))}
+          </datalist>
         </div>
 
         <div>
@@ -113,6 +120,41 @@ export function ItemForm({
               </option>
             ))}
           </select>
+        </div>
+
+        <div>
+          <label className="label" htmlFor="condition">
+            Condição
+          </label>
+          <select id="condition" name="condition" className="input" defaultValue={item?.condition ?? "novo"}>
+            <option value="novo">Novo</option>
+            <option value="seminovo">Seminovo</option>
+          </select>
+          <p className="mt-1 text-xs text-muted">
+            Produtos recebidos como entrada numa venda já entram como seminovo automaticamente.
+          </p>
+        </div>
+
+        <div className="flex items-start gap-2 sm:col-span-2">
+          <input
+            id="track_serial"
+            name="track_serial"
+            type="checkbox"
+            defaultChecked={item?.track_serial ?? false}
+            className="mt-1 h-4 w-4 rounded border-border"
+          />
+          <label htmlFor="track_serial" className="text-sm text-foreground">
+            Cada unidade tem número de série/IMEI próprio
+            <span className="block text-xs font-normal text-muted">
+              Na entrada de estoque e na venda, além do código de barras do produto, será preciso bipar o número de série de cada unidade.
+            </span>
+            {item && !item.track_serial && item.quantity > 0 && (
+              <span className="mt-1 block text-xs font-medium text-warning">
+                Esse produto já tem {item.quantity} em estoque sem número de série cadastrado. Ative isso e registre uma
+                nova entrada bipando os seriais das unidades que já estão na loja — senão elas não poderão ser vendidas.
+              </span>
+            )}
+          </label>
         </div>
       </div>
 

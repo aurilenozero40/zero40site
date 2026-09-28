@@ -31,6 +31,9 @@ export function ItemsTable({ items, showCost }: { items: Item[]; showCost: boole
                   <Link href={`/itens/${item.id}`} className="hover:underline">
                     {item.name}
                   </Link>
+                  {item.condition === "seminovo" && (
+                    <span className="ml-2 rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning">Seminovo</span>
+                  )}
                   {!item.active && <span className="ml-2 text-xs font-normal text-muted">(inativo)</span>}
                 </td>
                 <td className="px-4 py-3 text-muted">{item.sku ?? "-"}</td>

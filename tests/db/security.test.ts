@@ -3,8 +3,10 @@ import type pg from "pg";
 import { addItem, createTestDb, hintOf, ids, sell, stockOf, type TestDb } from "./helpers";
 
 let db: TestDb;
+let supplier: string;
 beforeAll(async () => {
   db = await createTestDb("upgrade");
+  supplier = (await db.one<{ id: string }>("select id from suppliers limit 1")).id;
 });
 afterAll(async () => {
   await db.close();
@@ -103,28 +105,35 @@ describe("preço e cadastro: só gerente+", () => {
 });
 
 describe("movimentações manuais", () => {
-  const mv = (subtype: string, type = "entrada", extra = "") =>
-    `insert into movements (item_id, type, subtype, quantity, created_by ${extra ? "," + extra.split("=")[0] : ""}) values ($1, '${type}', '${subtype}', 1, $2 ${extra ? "," + extra.split("=")[1] : ""})`;
+  // Toda movimentação manual (entrada/saída/ajuste) passa pela função create_movement — ela
+  // confere perfil, coerência tipo×subtipo e nunca aceita subtype 'venda'/'cancelamento' à mão.
+  const callMv = (user: string, item: string, type: string, subtype: string, reason: string | null = null, supplierId: string | null = null) =>
+    db.asUser(user, (c) => c.query("select public.create_movement($1, $2, 1, $3, null, $4, null, null, $5)", [type, item, subtype, reason, supplierId]));
 
   it("vendedor não lança; gerente lança compra/perda; ninguém lança 'venda' ou 'cancelamento' à mão", async () => {
     const item = await addItem(db, { name: "Manual", stock: 5 });
-    expect(await codeOf(db.asUser(ids.seller, (c) => c.query(mv("compra"), [item, ids.seller])))).toBe(DENIED);
-    expect(await codeOf(db.asUser(ids.manager, (c) => c.query(mv("compra"), [item, ids.manager])))).toBe("ok");
-    expect(await codeOf(db.asUser(ids.manager, (c) => c.query(mv("perda", "saida"), [item, ids.manager])))).toBe("ok");
-    expect(await codeOf(db.asUser(ids.manager, (c) => c.query(mv("venda", "saida"), [item, ids.manager])))).toBe(DENIED);
-    expect(await codeOf(db.asUser(ids.manager, (c) => c.query(mv("cancelamento"), [item, ids.manager])))).toBe(DENIED);
-    expect(await codeOf(db.asUser(ids.admin, (c) => c.query(mv("venda", "saida"), [item, ids.admin])))).toBe(DENIED);
+    expect(await hintOf(callMv(ids.seller, item, "entrada", "compra"))).toBe("FORBIDDEN");
+    expect(await codeOf(callMv(ids.manager, item, "entrada", "compra", null, supplier))).toBe("ok");
+    expect(await codeOf(callMv(ids.manager, item, "saida", "perda", "quebrou"))).toBe("ok");
+    expect(await hintOf(callMv(ids.manager, item, "saida", "venda"))).toBe("FORBIDDEN");
+    expect(await hintOf(callMv(ids.manager, item, "entrada", "cancelamento"))).toBe("FORBIDDEN");
+    expect(await hintOf(callMv(ids.admin, item, "saida", "venda"))).toBe("FORBIDDEN");
   });
 
-  it("não dá para lançar em nome de outra pessoa", async () => {
+  it("não dá para lançar em nome de outra pessoa: created_by é sempre quem está logado", async () => {
     const item = await addItem(db, { name: "Em nome de", stock: 5 });
-    expect(await codeOf(db.asUser(ids.manager, (c) => c.query(mv("compra"), [item, ids.admin])))).toBe(DENIED);
+    await callMv(ids.manager, item, "entrada", "compra", null, supplier);
+    const [row] = await db.q<{ created_by: string }>(
+      "select created_by from movements where item_id = $1 order by created_at desc limit 1",
+      [item]
+    );
+    expect(row.created_by).toBe(ids.manager);
   });
 
   it("subtipo incoerente com o tipo é recusado (saída 'compra', entrada 'perda')", async () => {
     const item = await addItem(db, { name: "Coerência", stock: 5 });
-    expect(await codeOf(db.asUser(ids.manager, (c) => c.query(mv("compra", "saida"), [item, ids.manager])))).toBe("23514");
-    expect(await codeOf(db.asUser(ids.manager, (c) => c.query(mv("perda", "entrada"), [item, ids.manager])))).toBe("23514");
+    expect(await codeOf(callMv(ids.manager, item, "saida", "compra"))).toBe("23514");
+    expect(await codeOf(callMv(ids.manager, item, "entrada", "perda"))).toBe("23514");
   });
 });
 

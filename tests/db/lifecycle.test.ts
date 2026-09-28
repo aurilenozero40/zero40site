@@ -240,7 +240,7 @@ describe("alertas de estoque (LOW_STOCK / OUT_OF_STOCK)", () => {
   it("perda/saída manual também dispara o alerta (não só a venda)", async () => {
     const item = await addItem(db, { name: "Perda manual", stock: 3, min: 2 });
     await db.asUser(ids.manager, (c) =>
-      c.query("insert into movements (item_id, type, subtype, quantity, reason, created_by) values ($1,'saida','perda',2,'quebrou',$2)", [item, ids.manager])
+      c.query("select public.create_movement('saida', $1, 2, 'perda', null, 'quebrou', null, null)", [item])
     );
     expect((await events("LOW_STOCK")).filter((e) => e.payload.item_id === item)).toHaveLength(1);
   });

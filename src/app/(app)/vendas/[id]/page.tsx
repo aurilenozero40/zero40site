@@ -18,7 +18,8 @@ type SaleDetail = Sale & {
   seller: { full_name: string } | null;
   canceller: { full_name: string } | null;
   customer: { id: string; name: string; document: string | null; phone: string | null } | null;
-  sale_items: SaleItem[];
+  trade_in_item: { id: string; name: string; active: boolean } | null;
+  sale_items: (SaleItem & { items: { track_serial: boolean } | null })[];
   sale_payments: SalePayment[];
 };
 
@@ -54,7 +55,7 @@ export default async function VendaDetalhePage({
   const { data, error } = await supabase
     .from("sales")
     .select(
-      "*, seller:employees!sales_seller_id_fkey(full_name), canceller:employees!sales_cancelled_by_fkey(full_name), customer:customers(id, name, document, phone), sale_items(*), sale_payments(*)"
+      "*, seller:employees!sales_seller_id_fkey(full_name), canceller:employees!sales_cancelled_by_fkey(full_name), customer:customers(id, name, document, phone), trade_in_item:items!sales_trade_in_item_id_fkey(id, name, active), sale_items(*, items(track_serial)), sale_payments(*)"
     )
     .eq("id", id)
     .maybeSingle();
@@ -66,6 +67,14 @@ export default async function VendaDetalhePage({
   const code = `VND-${String(sale.number).padStart(6, "0")}`;
   const pay = sale.sale_payments[0];
   const items = [...sale.sale_items].sort((a, b) => a.item_name.localeCompare(b.item_name));
+
+  // Seriais ainda vinculados a esta venda (voltam pro estoque e somem daqui em cancelamento/devolução).
+  const serialItemIds = items.filter((i) => i.items?.track_serial).map((i) => i.id);
+  const { data: serialRows } = serialItemIds.length
+    ? await supabase.from("item_serials").select("serial, sale_item_id").in("sale_item_id", serialItemIds).eq("status", "vendido")
+    : { data: [] as { serial: string; sale_item_id: string }[] };
+  const serialsBySaleItem = new Map<string, string[]>();
+  for (const r of serialRows ?? []) serialsBySaleItem.set(r.sale_item_id, [...(serialsBySaleItem.get(r.sale_item_id) ?? []), r.serial]);
 
   // Só gerente+ enxerga auditoria e fila (RLS): quem fez o quê, e se o CEO foi avisado.
   const [{ data: audit }, { data: outbox }] = manager
@@ -111,7 +120,15 @@ export default async function VendaDetalhePage({
             code={code}
             status={sale.status}
             total={Number(sale.total)}
-            items={items.map((i) => ({ id: i.id, name: i.item_name, unit: "", quantity: Number(i.quantity), returned: Number(i.returned_quantity) }))}
+            items={items.map((i) => ({
+              id: i.id,
+              name: i.item_name,
+              unit: "",
+              quantity: Number(i.quantity),
+              returned: Number(i.returned_quantity),
+              trackSerial: i.items?.track_serial ?? false,
+              soldSerials: serialsBySaleItem.get(i.id) ?? [],
+            }))}
           />
         )}
       </div>
@@ -145,6 +162,9 @@ export default async function VendaDetalhePage({
                         {i.item_name}
                       </Link>
                       <p className="font-mono text-xs text-muted">{[i.item_sku, i.item_barcode].filter(Boolean).join(" · ")}</p>
+                      {i.items?.track_serial && (
+                        <p className="font-mono text-xs text-muted">{(serialsBySaleItem.get(i.id) ?? []).join(", ") || "—"}</p>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
                       {formatQuantity(Number(i.quantity))}
@@ -183,6 +203,21 @@ export default async function VendaDetalhePage({
             <Line label="Subtotal" value={formatCurrency(Number(sale.subtotal))} />
             {Number(sale.discount_amount) > 0 && <Line label="Desconto" value={`− ${formatCurrency(Number(sale.discount_amount))}`} className="text-success" />}
             {Number(sale.interest_amount) > 0 && <Line label={`Juros (${Number(pay?.interest_percent ?? 0).toLocaleString("pt-BR")}%)`} value={`+ ${formatCurrency(Number(sale.interest_amount))}`} className="text-warning" />}
+            {Number(sale.trade_in_amount) > 0 && (
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted">
+                  Entrada:{" "}
+                  {sale.trade_in_item ? (
+                    <Link href={`/itens/${sale.trade_in_item.id}`} className="text-accent hover:underline">
+                      {sale.trade_in_item.name}
+                    </Link>
+                  ) : (
+                    "—"
+                  )}
+                </span>
+                <span className="tabular-nums text-success">− {formatCurrency(Number(sale.trade_in_amount))}</span>
+              </div>
+            )}
             <div className="border-t border-border" />
             <Line label="Total pago pelo cliente" value={formatCurrency(Number(sale.total))} strong />
             {Number(sale.refunded_amount) > 0 && <Line label="Reembolsado" value={`− ${formatCurrency(Number(sale.refunded_amount))}`} className="text-danger" />}

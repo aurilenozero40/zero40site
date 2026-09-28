@@ -6,16 +6,20 @@ import { redirect } from "next/navigation";
 import { requireEmployee } from "@/lib/auth/session";
 import { isManager } from "@/lib/roles";
 import { processNotifications } from "@/lib/notifications";
+import { friendlyRpcError } from "@/lib/sales/errors";
 import { movementSchema } from "@/lib/validations";
 
 export type ActionState = { error?: string } | null;
 
 function parseFormData(formData: FormData) {
   const type = formData.get("type");
+  const rawSerials = formData.get("serials");
+  const serials = typeof rawSerials === "string" && rawSerials.trim() !== "" ? JSON.parse(rawSerials) : undefined;
   const base = {
     type,
     item_id: formData.get("item_id"),
     quantity: formData.get("quantity"),
+    serials,
   };
 
   if (type === "entrada" || type === "saida") {
@@ -24,6 +28,7 @@ function parseFormData(formData: FormData) {
       subtype: formData.get("subtype"),
       unit_value: formData.get("unit_value") === "" ? "" : Number(formData.get("unit_value")),
       reason: formData.get("reason"),
+      supplier_id: formData.get("supplier_id") || null,
     };
   }
 
@@ -32,6 +37,39 @@ function parseFormData(formData: FormData) {
     adjustment_increases_stock: formData.get("direction") === "aumenta",
     reason: formData.get("reason"),
   };
+}
+
+export type SupplierHit = { id: string; name: string };
+
+/** Cadastro rápido de fornecedor direto da tela de movimentação — não precisa ir a outra tela. */
+export async function createSupplierQuickAction(name: string): Promise<ActionState & { data?: SupplierHit }> {
+  const { supabase, employee } = await requireEmployee();
+  if (!isManager(employee.role)) {
+    return { error: "Apenas gerente, administrador ou CEO podem cadastrar fornecedores." };
+  }
+  const trimmed = name.trim();
+  if (!trimmed) return { error: "Informe o nome do fornecedor." };
+
+  const { data, error } = await supabase.from("suppliers").insert({ name: trimmed }).select("id, name").single();
+  if (error) {
+    if (error.code === "23505") return { error: "Já existe um fornecedor com esse nome." };
+    return { error: friendlyRpcError(error) };
+  }
+  revalidatePath("/movimentacoes/nova");
+  return { data: data as SupplierHit };
+}
+
+/** Números de série ainda em estoque de um item (para saída/ajuste: escolher quais unidades saem). */
+export async function listAvailableSerialsAction(itemId: string): Promise<string[]> {
+  const { supabase } = await requireEmployee();
+  if (!itemId) return [];
+  const { data } = await supabase
+    .from("item_serials")
+    .select("serial")
+    .eq("item_id", itemId)
+    .eq("status", "estoque")
+    .order("created_at");
+  return (data ?? []).map((r) => r.serial as string);
 }
 
 /**
@@ -73,17 +111,20 @@ export async function createMovement(_prev: ActionState, formData: FormData): Pr
     return { error: "Motivo da perda é obrigatório" };
   }
 
-  const { error } = await supabase.from("movements").insert({
-    ...parsed.data,
-    source_channel: "web",
+  const { error } = await supabase.rpc("create_movement", {
+    p_type: parsed.data.type,
+    p_item_id: parsed.data.item_id,
+    p_quantity: parsed.data.quantity,
+    p_subtype: "subtype" in parsed.data ? (parsed.data.subtype ?? null) : null,
+    p_unit_value: "unit_value" in parsed.data ? (parsed.data.unit_value ?? null) : null,
+    p_reason: parsed.data.reason ?? null,
+    p_adjustment_increases_stock: "adjustment_increases_stock" in parsed.data ? parsed.data.adjustment_increases_stock : null,
+    p_serials: parsed.data.serials && parsed.data.serials.length > 0 ? parsed.data.serials : null,
+    p_supplier_id: "supplier_id" in parsed.data ? (parsed.data.supplier_id ?? null) : null,
   });
 
   if (error) {
-    if (error.message.includes("items_quantity_not_negative")) {
-      return { error: "Essa movimentação deixaria o estoque negativo. Confira a quantidade disponível do item." };
-    }
-    if (error.code === "42501") return { error: "Você não tem permissão para lançar movimentações." };
-    return { error: error.message };
+    return { error: friendlyRpcError(error) };
   }
 
   revalidatePath("/movimentacoes");

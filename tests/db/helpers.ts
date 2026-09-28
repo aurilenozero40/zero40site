@@ -165,13 +165,14 @@ export async function stockOf(db: TestDb, itemId: string): Promise<number> {
 export interface SaleArgs {
   key?: string;
   customer?: string | null;
-  items: { item_id: string; quantity: number }[];
+  items: { item_id: string; quantity: number; serials?: string[] }[];
   discount?: number;
   method?: string;
   installments?: number;
   interest?: number;
   brand?: string | null;
   notes?: string | null;
+  tradeIn?: { item_name: string; category?: string | null; value: number } | null;
 }
 
 export interface SaleResult {
@@ -184,7 +185,7 @@ export interface SaleResult {
 }
 
 export async function callCreateSale(c: pg.Client, a: SaleArgs): Promise<SaleResult> {
-  const r = await c.query("select public.create_sale($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9) as r", [
+  const r = await c.query("select public.create_sale($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10::jsonb) as r", [
     a.key ?? crypto.randomUUID(),
     a.customer ?? null,
     JSON.stringify(a.items),
@@ -194,6 +195,7 @@ export async function callCreateSale(c: pg.Client, a: SaleArgs): Promise<SaleRes
     a.interest ?? 0,
     a.brand ?? null,
     a.notes ?? null,
+    a.tradeIn ? JSON.stringify(a.tradeIn) : null,
   ]);
   return r.rows[0].r as SaleResult;
 }

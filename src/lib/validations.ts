@@ -33,11 +33,15 @@ export const itemSchema = z.object({
   max_stock: optionalNumber,
   location: z.string().trim().min(1).default("principal"),
   supplier_id: optionalText,
+  track_serial: z.boolean().default(false),
+  condition: z.enum(["novo", "seminovo"]).default("novo"),
 });
 
 export type ItemInput = z.input<typeof itemSchema>;
 
 // ---- Movimentações manuais de estoque (venda NÃO é feita aqui: é no PDV) -----------------------
+
+const serials = z.array(z.string().trim().min(1)).max(500).optional();
 
 export const movementSchema = z.discriminatedUnion("type", [
   z.object({
@@ -47,6 +51,8 @@ export const movementSchema = z.discriminatedUnion("type", [
     quantity: z.coerce.number().positive("Quantidade deve ser maior que zero"),
     unit_value: optionalNumber,
     reason: optionalText,
+    serials,
+    supplier_id: z.string().uuid().nullable().optional(),
   }),
   z.object({
     type: z.literal("saida"),
@@ -55,6 +61,7 @@ export const movementSchema = z.discriminatedUnion("type", [
     quantity: z.coerce.number().positive("Quantidade deve ser maior que zero"),
     unit_value: optionalNumber,
     reason: optionalText,
+    serials,
   }),
   z.object({
     type: z.literal("ajuste"),
@@ -62,6 +69,7 @@ export const movementSchema = z.discriminatedUnion("type", [
     quantity: z.coerce.number().positive("Quantidade deve ser maior que zero"),
     adjustment_increases_stock: z.boolean(),
     reason: z.string().trim().min(1, "Motivo é obrigatório para ajuste"),
+    serials,
   }),
 ]);
 
@@ -118,6 +126,7 @@ export const saleInputSchema = z.object({
       z.object({
         itemId: z.string().uuid(),
         quantity: z.number().positive("Quantidade deve ser maior que zero").max(1_000_000),
+        serials: z.array(z.string().trim().min(1)).max(1000).optional(),
       })
     )
     .min(1, "Adicione ao menos um produto")
@@ -128,6 +137,14 @@ export const saleInputSchema = z.object({
   interestPercent: z.number().min(0, "Juros inválido").max(100, "Juros inválido").default(0),
   cardBrand: z.string().trim().max(30).nullable().optional(),
   notes: z.string().trim().max(500).nullable().optional(),
+  tradeIn: z
+    .object({
+      itemName: z.string().trim().min(1, "Informe o nome do produto recebido de entrada"),
+      category: z.string().trim().max(60).nullable().optional(),
+      value: z.number().positive("Informe o valor do produto recebido de entrada"),
+    })
+    .nullable()
+    .optional(),
 });
 
 export type SaleInput = z.input<typeof saleInputSchema>;
@@ -142,6 +159,12 @@ export const returnSaleSchema = z.object({
   idempotencyKey: z.string().uuid(),
   reason: z.string().trim().min(3, "Informe o motivo da devolução").max(300),
   items: z
-    .array(z.object({ saleItemId: z.string().uuid(), quantity: z.number().positive() }))
+    .array(
+      z.object({
+        saleItemId: z.string().uuid(),
+        quantity: z.number().positive(),
+        serials: z.array(z.string().trim().min(1)).max(1000).optional(),
+      })
+    )
     .min(1, "Selecione ao menos um item para devolver"),
 });

@@ -31,10 +31,28 @@ export type Item = {
   abc_class: "A" | "B" | "C" | null;
   location: string | null;
   supplier_id: string | null;
+  track_serial: boolean;
+  condition: "novo" | "seminovo";
   active: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ItemSerialStatus = "estoque" | "vendido" | "baixado";
+
+export type ItemSerial = {
+  id: string;
+  item_id: string;
+  serial: string;
+  status: ItemSerialStatus;
+  sale_item_id: string | null;
+  movement_in_id: string | null;
+  movement_out_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  sold_at: string | null;
+  removed_at: string | null;
 };
 
 export type Supplier = {
@@ -67,6 +85,7 @@ export type MovementSubtype =
   | "devolucao"
   | "transferencia"
   | "cancelamento"
+  | "troca"
   | "uso"
   | "perda"
   | "venda"
@@ -120,6 +139,8 @@ export type Sale = {
   interest_amount: number;
   total: number;
   refunded_amount: number;
+  trade_in_amount: number;
+  trade_in_item_id: string | null;
   notes: string | null;
   cancelled_at: string | null;
   cancelled_by: string | null;
