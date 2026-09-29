@@ -136,12 +136,14 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
     handleFoundItem(found);
   }
 
-  function confirmSupplier() {
-    if (!pendingSupplier || !supplierDraftId) return;
-    const name = localSuppliers.find((s) => s.id === supplierDraftId)?.name ?? "";
+  // Escolher o fornecedor já avança sozinho — sem precisar de um clique extra em "Confirmar".
+  function chooseSupplier(supplierId: string) {
+    if (!pendingSupplier || !supplierId) return;
+    const name = localSuppliers.find((s) => s.id === supplierId)?.name ?? "";
     const item = pendingSupplier.item;
     setPendingSupplier(null);
-    proceedWithSupplier(item, supplierDraftId, name);
+    setSupplierDraftId("");
+    proceedWithSupplier(item, supplierId, name);
   }
 
   async function submitNewSupplier() {
@@ -151,9 +153,9 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
     setSupplierPending(false);
     if (r.error || !r.data) return setNotice({ kind: "error", text: r.error ?? "Não foi possível cadastrar o fornecedor." });
     setLocalSuppliers((prev) => [...prev, r.data!].sort((a, b) => a.name.localeCompare(b.name)));
-    setSupplierDraftId(r.data.id);
     setAddingSupplier(false);
     setNewSupplierName("");
+    chooseSupplier(r.data.id);
   }
 
   function confirmSerialScan() {
@@ -306,13 +308,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
                 ref={supplierRef}
                 className="input"
                 value={supplierDraftId}
-                onChange={(e) => setSupplierDraftId(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    confirmSupplier();
-                  }
-                }}
+                onChange={(e) => chooseSupplier(e.target.value)}
               >
                 <option value="">Selecione...</option>
                 {localSuppliers.map((s) => (
@@ -323,9 +319,6 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
               </select>
               <button type="button" className="btn-secondary shrink-0" onClick={() => setAddingSupplier(true)}>
                 + Novo
-              </button>
-              <button type="button" className="btn-primary shrink-0" disabled={!supplierDraftId} onClick={confirmSupplier}>
-                Confirmar
               </button>
               <button
                 type="button"

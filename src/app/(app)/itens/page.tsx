@@ -54,6 +54,13 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
       `[itens] erro ao buscar items: code=${error.code} message=${error.message} details=${error.details} hint=${error.hint}`
     );
 
+  // % de participação nas vendas — só gerente+ (o próprio banco só devolveria as vendas do vendedor).
+  const salesShare = new Map<string, number>();
+  if (manager) {
+    const { data: ranking } = await supabase.rpc("item_sales_ranking");
+    for (const r of (ranking as { item_id: string; share_percent: number }[]) ?? []) salesShare.set(r.item_id, r.share_percent);
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
@@ -85,7 +92,7 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
         </button>
       </form>
 
-      <ItemsTable items={(items as Item[]) ?? []} showCost={manager} />
+      <ItemsTable items={(items as Item[]) ?? []} showCost={manager} salesShare={manager ? salesShare : undefined} />
       <Pagination
         page={page}
         pageSize={PAGE_SIZE}

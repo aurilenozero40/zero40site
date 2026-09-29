@@ -1872,6 +1872,41 @@ as $$
   from public.items
 $$;
 
+-- Participação de cada produto no faturamento (% de vendas) — só gerente+ vê (RLS de sales:
+-- SECURITY INVOKER, então um vendedor chamando isso só enxergaria as próprias vendas).
+create or replace function public.item_sales_ranking()
+returns jsonb
+language sql stable
+as $$
+  with lines as (
+    select si.item_id, si.item_name,
+           (si.quantity - si.returned_quantity) as net_qty,
+           case when si.quantity = 0 then 0
+                else si.line_total * (si.quantity - si.returned_quantity) / si.quantity end as net_revenue
+      from public.sale_items si
+      join public.sales s on s.id = si.sale_id
+     where s.status in ('concluida', 'parcialmente_devolvida', 'devolvida')
+  ),
+  agg as (
+    select item_id, item_name, sum(net_qty) as units_sold, sum(net_revenue) as revenue
+      from lines
+     group by item_id, item_name
+  ),
+  total as (
+    select coalesce(sum(revenue), 0) as revenue from agg
+  )
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object(
+        'item_id', agg.item_id, 'name', agg.item_name,
+        'units_sold', trim_scale(agg.units_sold), 'revenue', round(agg.revenue, 2),
+        'share_percent', case when total.revenue = 0 then 0 else round(agg.revenue / total.revenue * 100, 2) end
+      )
+      order by agg.revenue desc
+    ), '[]'::jsonb)
+  from agg, total
+$$;
+
 -- Estoque baixo: mínimo definido, saldo > 0 e <= mínimo.
 -- Esgotado: saldo <= 0 em produto que JÁ teve movimento (produto recém-cadastrado, sem
 -- nenhuma entrada, não é "esgotado" — ainda nem foi estocado).
@@ -1938,6 +1973,7 @@ grant  execute on function public.sales_dashboard(timestamptz, timestamptz)     
 grant  execute on function public.stock_alerts()                                   to authenticated;
 grant  execute on function public.sale_limits()                                    to authenticated;
 grant  execute on function public.inventory_summary()                              to authenticated;
+grant  execute on function public.item_sales_ranking()                             to authenticated;
 
 
 -- ============================================================================

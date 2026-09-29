@@ -19,6 +19,7 @@ export function ItemForm({
 }) {
   const [state, formAction, pending] = useActionState<ActionState, FormData>(action, null);
   const [barcode, setBarcode] = useState(item?.barcode ?? "");
+  const [trackSerial, setTrackSerial] = useState(item?.track_serial ?? false);
 
   // Só avisa (não bloqueia): códigos internos/alfanuméricos são válidos, mas um
   // código numérico de 8/12/13/14 dígitos com verificador errado é quase
@@ -146,27 +147,41 @@ export function ItemForm({
           </p>
         </div>
 
-        <div className="flex items-start gap-2 sm:col-span-2">
-          <input
-            id="track_serial"
-            name="track_serial"
-            type="checkbox"
-            defaultChecked={item?.track_serial ?? false}
-            className="mt-1 h-4 w-4 rounded border-border"
-          />
-          <label htmlFor="track_serial" className="text-sm text-foreground">
-            Cada unidade tem número de série/IMEI próprio
-            <span className="block text-xs font-normal text-muted">
-              Na entrada de estoque e na venda, além do código de barras do produto, será preciso bipar o número de série de cada unidade.
-            </span>
-            {item && !item.track_serial && item.quantity > 0 && (
-              <span className="mt-1 block text-xs font-medium text-warning">
-                Esse produto já tem {item.quantity} em estoque sem número de série cadastrado. Ative isso e registre uma
-                nova entrada bipando os seriais das unidades que já estão na loja — senão elas não poderão ser vendidas.
-              </span>
-            )}
-          </label>
+      </div>
+
+      <div className="card flex flex-col gap-2">
+        <input type="hidden" name="track_serial" value={trackSerial ? "on" : ""} />
+        <p className="text-sm font-medium text-foreground">Esse produto tem número de série (IMEI)?</p>
+        <p className="text-xs text-muted">
+          Cada GPS/relógio tem um número de série próprio? Se sim, na entrada de estoque e na venda vai aparecer um
+          campo extra pra bipar esse número, unidade por unidade — além do código de barras do produto.
+        </p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setTrackSerial(true)}
+            className={`rounded-md border px-4 py-2 text-sm font-medium transition-colors ${
+              trackSerial ? "border-accent bg-accent/15 text-foreground" : "border-border bg-background text-muted hover:text-foreground"
+            }`}
+          >
+            Sim, tem número de série
+          </button>
+          <button
+            type="button"
+            onClick={() => setTrackSerial(false)}
+            className={`rounded-md border px-4 py-2 text-sm font-medium transition-colors ${
+              !trackSerial ? "border-accent bg-accent/15 text-foreground" : "border-border bg-background text-muted hover:text-foreground"
+            }`}
+          >
+            Não
+          </button>
         </div>
+        {item && !item.track_serial && trackSerial && item.quantity > 0 && (
+          <p className="text-xs font-medium text-warning">
+            Esse produto já tem {item.quantity} em estoque sem número de série cadastrado. Depois de salvar, registre uma
+            nova entrada bipando os seriais das unidades que já estão na loja — senão elas não poderão ser vendidas.
+          </p>
+        )}
       </div>
 
       <div className="card">
