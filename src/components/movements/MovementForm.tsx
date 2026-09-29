@@ -5,18 +5,13 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { ScanBarcode, X } from "lucide-react";
 import { cn, formatQuantity } from "@/lib/utils";
 import { normalizeBarcode } from "@/lib/barcode";
-import { createSupplierQuickAction, listAvailableSerialsAction, type SupplierHit } from "@/app/(app)/movimentacoes/actions";
+import { listAvailableSerialsAction } from "@/app/(app)/movimentacoes/actions";
 import type { Item } from "@/lib/types";
 import type { ActionState } from "@/app/(app)/movimentacoes/actions";
 
-const ENTRADA_SUBTYPES = [
-  { value: "compra", label: "Compra" },
-  { value: "devolucao", label: "Devolução" },
-  { value: "transferencia", label: "Transferência" },
-  { value: "outros", label: "Outros" },
-];
-
 // Venda NÃO está aqui de propósito: toda venda nasce no PDV (Nova venda), com cliente, pagamento e auditoria.
+// Entrada também não está aqui: entrada de estoque tem tela própria (carrinho — StockEntryForm),
+// já que uma nota geralmente traz vários produtos de uma vez.
 const SAIDA_SUBTYPES = [
   { value: "perda", label: "Perda (quebra, vencimento, sumiço)" },
   { value: "uso", label: "Uso interno" },
@@ -27,18 +22,15 @@ const SAIDA_SUBTYPES = [
 export function MovementForm({
   action,
   items,
-  suppliers,
   defaultItemId,
 }: {
   action: (prevState: ActionState, formData: FormData) => Promise<ActionState>;
   items: Item[];
-  suppliers: SupplierHit[];
   defaultItemId?: string;
 }) {
   const [state, formAction, pending] = useActionState<ActionState, FormData>(action, null);
-  const [type, setType] = useState<"entrada" | "saida" | "ajuste">("entrada");
+  const [type, setType] = useState<"saida" | "ajuste">("saida");
   const [itemId, setItemId] = useState(defaultItemId ?? "");
-  const [entradaSubtype, setEntradaSubtype] = useState("compra");
   const [saidaSubtype, setSaidaSubtype] = useState("perda");
   const [saidaQuantity, setSaidaQuantity] = useState("");
   const [ajusteQuantity, setAjusteQuantity] = useState("");
@@ -48,18 +40,13 @@ export function MovementForm({
   const [barcodeInput, setBarcodeInput] = useState("");
   const [scanStatus, setScanStatus] = useState<{ ok: boolean; message: string } | null>(null);
 
-  // Bipagem de número de série (produtos com track_serial): entrada cadastra serial novo;
+  // Bipagem de número de série (produtos com track_serial): ajuste-aumenta cadastra serial novo;
   // saída/ajuste-diminui exige escolher um serial que já está em estoque.
   const [serials, setSerials] = useState<string[]>([]);
   const [serialInput, setSerialInput] = useState("");
   const [serialError, setSerialError] = useState<string | null>(null);
   // guarda de qual item é a lista carregada — evita mostrar seriais do item anterior durante o fetch
   const [availableSerials, setAvailableSerials] = useState<{ itemId: string; list: string[] } | null>(null);
-
-  // Fornecedor da entrada: uma vez escolhido pra um item, o próprio item "lembra" (supplier_id) e
-  // vem pré-selecionado nas próximas entradas — só pergunta de novo se quiser trocar.
-  const [localSuppliers, setLocalSuppliers] = useState(suppliers);
-  const [supplierId, setSupplierId] = useState(() => items.find((i) => i.id === (defaultItemId ?? ""))?.supplier_id ?? "");
 
   const selectedItem = useMemo(() => items.find((i) => i.id === itemId), [items, itemId]);
   const isDecreaseMode = type === "saida" || (type === "ajuste" && ajusteDirection === "diminui");
@@ -112,7 +99,6 @@ export function MovementForm({
 
     setItemId(found.id);
     resetSerialScan();
-    setSupplierId(found.supplier_id ?? "");
     setScanStatus({ ok: true, message: `${found.name} selecionado.` });
     setBarcodeInput("");
     // Já leva o cursor pro próximo passo: seriais (se o item usa) ou quantidade.
@@ -148,7 +134,18 @@ export function MovementForm({
       : [];
 
   return (
-    <form action={formAction} className="flex flex-col gap-6">
+    <form
+      action={formAction}
+      // Enter num campo comum não pode enviar a movimentação pela metade — os campos de bipagem
+      // (código de barras, número de série) já tratam o Enter deles mesmos, antes de chegar aqui.
+      onKeyDown={(e) => {
+        const tag = (e.target as HTMLElement).tagName;
+        if (e.key === "Enter" && (tag === "INPUT" || tag === "SELECT")) {
+          e.preventDefault();
+        }
+      }}
+      className="flex flex-col gap-6"
+    >
       <div className="card flex flex-col gap-2">
         <div className="mb-2 flex flex-col gap-1">
           <label className="label mb-0" htmlFor="barcode_scan">
@@ -203,7 +200,6 @@ export function MovementForm({
           onChange={(e) => {
             setItemId(e.target.value);
             resetSerialScan();
-            setSupplierId(items.find((i) => i.id === e.target.value)?.supplier_id ?? "");
           }}
         >
           <option value="" disabled>
@@ -233,7 +229,7 @@ export function MovementForm({
         className="card flex flex-col gap-4"
       >
         <Tabs.List className="flex gap-1 rounded-md bg-background p-1">
-          {(["entrada", "saida", "ajuste"] as const).map((t) => (
+          {(["saida", "ajuste"] as const).map((t) => (
             <Tabs.Trigger
               key={t}
               value={t}
@@ -255,87 +251,6 @@ export function MovementForm({
             <input type="hidden" name="serials" value={JSON.stringify(serials)} />
           </>
         )}
-
-        <Tabs.Content value="entrada" className="flex flex-col gap-4">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label" htmlFor="entrada_subtype">
-                Motivo da entrada *
-              </label>
-              <select
-                id="entrada_subtype"
-                name="subtype"
-                required
-                className="input"
-                value={entradaSubtype}
-                onChange={(e) => setEntradaSubtype(e.target.value)}
-              >
-                {ENTRADA_SUBTYPES.map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {selectedItem?.track_serial ? (
-              <SerialScanField
-                label="Números de série que estão entrando *"
-                helper="Bipe o número de série de cada unidade — a quantidade é a soma dos seriais."
-                serials={serials}
-                serialInput={serialInput}
-                onChangeInput={setSerialInput}
-                onAdd={addSerial}
-                onRemove={removeSerial}
-                error={serialError}
-              />
-            ) : (
-              <div>
-                <label className="label" htmlFor="entrada_quantity">
-                  Quantidade *
-                </label>
-                <input
-                  id="entrada_quantity"
-                  name="quantity"
-                  type="number"
-                  step="0.001"
-                  min="0.001"
-                  required
-                  className="input"
-                />
-              </div>
-            )}
-            <div>
-              <label className="label" htmlFor="entrada_unit_value">
-                Valor de entrada (R$/un)
-              </label>
-              <input
-                id="entrada_unit_value"
-                name="unit_value"
-                type="number"
-                step="0.01"
-                min="0"
-                className="input"
-              />
-            </div>
-            <SupplierField
-              suppliers={localSuppliers}
-              value={supplierId}
-              onChange={setSupplierId}
-              onCreated={(s) => {
-                setLocalSuppliers((prev) => [...prev, s].sort((a, b) => a.name.localeCompare(b.name)));
-                setSupplierId(s.id);
-              }}
-              required={entradaSubtype === "compra" && !supplierId}
-              remembered={selectedItem?.supplier_id === supplierId && !!supplierId}
-            />
-          </div>
-          <div>
-            <label className="label" htmlFor="entrada_reason">
-              Observação
-            </label>
-            <input id="entrada_reason" name="reason" className="input" />
-          </div>
-        </Tabs.Content>
 
         <Tabs.Content value="saida" className="flex flex-col gap-4">
           <p className="rounded-md bg-background px-3 py-2 text-xs text-muted">
@@ -522,102 +437,13 @@ export function MovementForm({
             pending ||
             (selectedItem?.track_serial && serials.length === 0) ||
             (!selectedItem?.track_serial && type === "saida" && saidaExceedsStock) ||
-            (!selectedItem?.track_serial && type === "ajuste" && ajusteExceedsStock) ||
-            (type === "entrada" && entradaSubtype === "compra" && !supplierId)
+            (!selectedItem?.track_serial && type === "ajuste" && ajusteExceedsStock)
           }
         >
           {pending ? "Salvando..." : "Registrar movimentação"}
         </button>
       </div>
     </form>
-  );
-}
-
-function SupplierField({
-  suppliers,
-  value,
-  onChange,
-  onCreated,
-  required,
-  remembered,
-}: {
-  suppliers: SupplierHit[];
-  value: string;
-  onChange: (id: string) => void;
-  onCreated: (s: SupplierHit) => void;
-  required: boolean;
-  remembered: boolean;
-}) {
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submitNew() {
-    if (!name.trim()) return;
-    setError(null);
-    setPending(true);
-    const r = await createSupplierQuickAction(name);
-    setPending(false);
-    if (r.error || !r.data) return setError(r.error ?? "Não foi possível cadastrar o fornecedor.");
-    onCreated(r.data);
-    setAdding(false);
-    setName("");
-  }
-
-  return (
-    <div>
-      <label className="label" htmlFor="supplier_id">
-        Fornecedor{required ? " *" : ""}
-      </label>
-      {adding ? (
-        <div className="flex gap-2">
-          <input
-            autoFocus
-            className="input"
-            placeholder="Nome do fornecedor"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void submitNew();
-              }
-            }}
-          />
-          <button
-            type="button"
-            className="btn-secondary shrink-0"
-            onClick={() => {
-              setAdding(false);
-              setName("");
-              setError(null);
-            }}
-          >
-            Cancelar
-          </button>
-          <button type="button" className="btn-primary shrink-0" disabled={pending || !name.trim()} onClick={submitNew}>
-            {pending ? "..." : "Adicionar"}
-          </button>
-        </div>
-      ) : (
-        <div className="flex gap-2">
-          <select id="supplier_id" name="supplier_id" className="input" value={value} onChange={(e) => onChange(e.target.value)}>
-            <option value="">Selecione...</option>
-            {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <button type="button" className="btn-secondary shrink-0" onClick={() => setAdding(true)}>
-            + Novo
-          </button>
-        </div>
-      )}
-      {error && <p className="mt-1 text-xs font-medium text-danger">{error}</p>}
-      {remembered && <p className="mt-1 text-xs text-muted">Lembrado deste produto — troque se essa unidade veio de outro fornecedor.</p>}
-    </div>
   );
 }
 

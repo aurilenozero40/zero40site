@@ -59,6 +59,60 @@ export async function createSupplierQuickAction(name: string): Promise<ActionSta
   return { data: data as SupplierHit };
 }
 
+export type StockEntryResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
+
+export interface StockEntryLine {
+  itemId: string;
+  quantity?: number;
+  unitValue?: number | null;
+  supplierId?: string | null;
+  serials?: string[];
+}
+
+/**
+ * Entrada de estoque em LOTE (uma nota com vários produtos de uma vez). Cada linha já chega
+ * agrupada por item+fornecedor (a tela faz isso); o banco processa tudo numa transação só.
+ */
+export async function createStockEntryAction(input: {
+  subtype: string;
+  reason?: string | null;
+  items: StockEntryLine[];
+}): Promise<StockEntryResult<{ count: number }>> {
+  const { supabase, employee } = await requireEmployee();
+  if (!isManager(employee.role)) {
+    return { ok: false, error: "Apenas gerente, administrador ou CEO podem lançar entradas de estoque." };
+  }
+  if (!input.items || input.items.length === 0) {
+    return { ok: false, error: "Adicione ao menos um item à entrada." };
+  }
+
+  const { data, error } = await supabase.rpc("create_stock_entry", {
+    p_items: input.items.map((i) => ({
+      item_id: i.itemId,
+      quantity: i.quantity ?? null,
+      unit_value: i.unitValue ?? null,
+      supplier_id: i.supplierId ?? null,
+      serials: i.serials && i.serials.length > 0 ? i.serials : undefined,
+    })),
+    p_subtype: input.subtype,
+    p_reason: input.reason ?? null,
+  });
+
+  if (error) {
+    return { ok: false, error: friendlyRpcError(error) };
+  }
+
+  revalidatePath("/movimentacoes");
+  revalidatePath("/itens");
+  revalidatePath("/dashboard");
+  revalidatePath("/relatorios/entradas");
+  after(async () => {
+    await processNotifications();
+  });
+
+  return { ok: true, data: { count: (data as { count: number }).count } };
+}
+
 /** Números de série ainda em estoque de um item (para saída/ajuste: escolher quais unidades saem). */
 export async function listAvailableSerialsAction(itemId: string): Promise<string[]> {
   const { supabase } = await requireEmployee();

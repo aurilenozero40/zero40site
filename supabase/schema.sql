@@ -1135,6 +1135,62 @@ begin
 end;
 $$;
 
+-- ---- 10.0b create_stock_entry -----------------------------------------------------------------
+-- Entrada de estoque em LOTE (uma "nota" com vários produtos de uma vez): cada elemento de
+-- p_items já chega do cliente AGRUPADO por item+fornecedor (mesmo item + mesmo fornecedor =
+-- uma linha só, com a quantidade somada; item diferente ou fornecedor diferente = linha própria).
+-- Aqui só processa: chama create_movement() linha a linha, tudo dentro da MESMA transação —
+-- se uma linha falhar, nenhuma é gravada.
+create or replace function public.create_stock_entry(
+  p_items jsonb,                  -- [{ item_id, quantity?, unit_value?, supplier_id?, serials?, subtype?, reason? }]
+  p_subtype text default 'compra',
+  p_reason text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_elem jsonb;
+  v_line jsonb;
+  v_lines jsonb := '[]'::jsonb;
+begin
+  if not public.is_manager() then
+    raise exception 'Apenas gerente, administrador ou CEO podem lançar movimentações de estoque.'
+      using errcode = 'P0001', hint = 'FORBIDDEN';
+  end if;
+  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'Adicione ao menos um item à entrada.' using errcode = 'P0001', hint = 'EMPTY_CART';
+  end if;
+  if jsonb_array_length(p_items) > 200 then
+    raise exception 'Máximo de 200 itens por entrada.' using errcode = 'P0001', hint = 'TOO_MANY_ITEMS';
+  end if;
+
+  -- ordem estável por item_id: evita deadlock com outra entrada em lote acontecendo ao mesmo tempo.
+  for v_elem in select value from jsonb_array_elements(p_items) order by value ->> 'item_id' loop
+    if coalesce(v_elem ->> 'item_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+      raise exception 'Produto inválido na entrada.' using errcode = 'P0001', hint = 'INVALID_ITEM';
+    end if;
+
+    v_line := public.create_movement(
+      p_type => 'entrada',
+      p_item_id => (v_elem ->> 'item_id')::uuid,
+      p_quantity => case when v_elem ->> 'quantity' is not null then (v_elem ->> 'quantity')::numeric else null end,
+      p_subtype => coalesce(v_elem ->> 'subtype', p_subtype),
+      p_unit_value => case when v_elem ->> 'unit_value' is not null then (v_elem ->> 'unit_value')::numeric else null end,
+      p_reason => coalesce(v_elem ->> 'reason', p_reason),
+      p_adjustment_increases_stock => null,
+      p_serials => v_elem -> 'serials',
+      p_supplier_id => case when v_elem ->> 'supplier_id' is not null then (v_elem ->> 'supplier_id')::uuid else null end
+    );
+    v_lines := v_lines || jsonb_build_object('item_id', v_elem ->> 'item_id', 'movement_id', v_line ->> 'movement_id', 'quantity', v_line -> 'quantity');
+  end loop;
+
+  return jsonb_build_object('lines', v_lines, 'count', jsonb_array_length(v_lines));
+end;
+$$;
+
 -- ---- 10.1 create_sale ------------------------------------------------------------------------
 -- Uma única transação: valida → trava produtos → calcula → grava venda, itens, pagamento,
 -- movimentações (que baixam o estoque) → auditoria → evento de notificação.
@@ -1869,6 +1925,8 @@ grant  execute on function public.notification_retry(uuid)                      
 -- Regras de venda e de movimentação: só usuário logado (a função ainda confere perfil por dentro).
 revoke execute on function public.create_movement(text, uuid, numeric, text, numeric, text, boolean, jsonb, uuid) from public, anon;
 grant  execute on function public.create_movement(text, uuid, numeric, text, numeric, text, boolean, jsonb, uuid) to authenticated;
+revoke execute on function public.create_stock_entry(jsonb, text, text) from public, anon;
+grant  execute on function public.create_stock_entry(jsonb, text, text) to authenticated;
 revoke execute on function public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text, jsonb) from public, anon;
 revoke execute on function public.cancel_sale(uuid, text)                          from public, anon;
 revoke execute on function public.return_sale_items(uuid, jsonb, text, uuid)       from public, anon;

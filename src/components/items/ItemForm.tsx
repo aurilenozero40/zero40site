@@ -30,7 +30,18 @@ export function ItemForm({
     !isValidGtin(trimmedBarcode);
 
   return (
-    <form action={formAction} className="flex flex-col gap-6">
+    <form
+      action={formAction}
+      // O leitor de código de barras "digita" o código e manda Enter — sem isso, o Enter
+      // enviava o formulário na hora (produto salvo pela metade, faltando os outros campos).
+      onKeyDown={(e) => {
+        const tag = (e.target as HTMLElement).tagName;
+        if (e.key === "Enter" && (tag === "INPUT" || tag === "SELECT")) {
+          e.preventDefault();
+        }
+      }}
+      className="flex flex-col gap-6"
+    >
       <div className="card grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
           <label className="label" htmlFor="name">

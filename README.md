@@ -24,6 +24,10 @@ Vendedor → Nova venda (bipa o código de barras) → Confirma
   valor abate o total da venda (fora do limite de desconto do vendedor). O produto entra automaticamente no
   estoque como **seminovo** (`condition`), com custo = valor da entrada; o gerente define o preço de venda depois.
   Cancelar a venda tira esse produto do estoque de novo — a menos que já tenha sido revendido.
+- **Entrada de estoque em nota (vários produtos de uma vez):** em Movimentações → Nova, a entrada é um
+  carrinho — bipe o código de barras de cada produto. Bipar o **mesmo produto do mesmo fornecedor** de
+  novo só soma a quantidade na mesma linha (grupo); produto diferente, ou o mesmo produto com número de
+  série, vira linha própria (individual, uma por unidade). Tudo é gravado numa única transação.
 - **Fornecedor na entrada de estoque:** numa **compra**, o gerente escolhe o fornecedor uma vez — o produto
   "lembra" (`items.supplier_id`) e as próximas compras dele já vêm com o fornecedor preenchido, sem perguntar
   de novo (só troca se quiser). Cadastra fornecedor novo direto na tela, sem precisar de outra tela.
