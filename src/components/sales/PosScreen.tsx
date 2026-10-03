@@ -71,16 +71,37 @@ const parseNumber = (text: string) => {
 };
 const cents = (c: number) => formatCurrency(c / 100);
 
+interface KitComponent {
+  itemId: string;
+  name: string;
+  sku: string | null;
+  barcode: string | null;
+  unit: string;
+  salePrice: number | null;
+  stock: number;
+  quantity: number;
+}
+
+interface KitOption {
+  id: string;
+  name: string;
+  kitPrice: number;
+  normalPrice: number;
+  components: KitComponent[];
+}
+
 export function PosScreen({
   feeRates,
   discountLimitPercent,
   maxInterestPercent,
   canSeeFees,
+  kits,
 }: {
   feeRates: CardFeeRates;
   discountLimitPercent: number;
   maxInterestPercent: number;
   canSeeFees: boolean;
+  kits?: KitOption[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -269,6 +290,51 @@ export function PosScreen({
     }
     searchRef.current?.focus();
     setNotice({ kind: "ok", text: `${hit.name} adicionado.` });
+  }
+
+  // Kit = vários produtos de uma vez, cada um baixando do próprio estoque; a diferença pro
+  // preço normal vira desconto em R$ (some com o que já estiver no campo de desconto).
+  function addKit(kit: KitOption) {
+    for (const c of kit.components) {
+      if (c.salePrice === null || c.salePrice <= 0) {
+        return setNotice({ kind: "error", text: `${c.name} está sem preço de venda — ajuste o kit.` });
+      }
+    }
+    setCart((c) => {
+      let next = c;
+      for (const comp of kit.components) {
+        const idx = next.findIndex((l) => l.itemId === comp.itemId);
+        if (idx >= 0) {
+          const updated = [...next];
+          updated[idx] = { ...updated[idx], qtyText: String(parseNumber(updated[idx].qtyText) + comp.quantity) };
+          next = updated;
+        } else {
+          next = [
+            ...next,
+            {
+              itemId: comp.itemId,
+              name: comp.name,
+              sku: comp.sku,
+              barcode: comp.barcode,
+              unit: comp.unit,
+              unitPriceCents: toCents(comp.salePrice!),
+              stock: comp.stock,
+              qtyText: String(comp.quantity),
+              trackSerial: false,
+              serials: [],
+            },
+          ];
+        }
+      }
+      return next;
+    });
+    const savingsCents = toCents(kit.normalPrice - kit.kitPrice);
+    if (savingsCents > 0) {
+      setDiscountMode("valor");
+      setDiscountText((prev) => ((parseNumber(prev) * 100 + savingsCents) / 100).toString());
+    }
+    setNotice({ kind: "ok", text: `Kit "${kit.name}" adicionado.` });
+    searchRef.current?.focus();
   }
 
   function cancelSerialScan() {
@@ -495,6 +561,29 @@ export function PosScreen({
                 <AlertTriangle size={14} /> {serialError}
               </p>
             )}
+          </div>
+        )}
+
+        {!!kits?.length && (
+          <div className="card flex flex-col gap-2">
+            <h2 className="text-sm font-semibold text-foreground">Kits</h2>
+            <div className="flex flex-wrap gap-2">
+              {kits.map((k) => (
+                <button
+                  key={k.id}
+                  type="button"
+                  onClick={() => addKit(k)}
+                  className="rounded-md border border-border bg-background px-3 py-2 text-left text-sm hover:border-accent"
+                  title={k.components.map((c) => `${c.quantity}x ${c.name}`).join(", ")}
+                >
+                  <span className="block font-medium text-foreground">{k.name}</span>
+                  <span className="block text-xs text-muted">
+                    {cents(toCents(k.kitPrice))}
+                    {k.normalPrice > k.kitPrice && <span className="ml-1 line-through">{cents(toCents(k.normalPrice))}</span>}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 

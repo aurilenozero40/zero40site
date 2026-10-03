@@ -33,6 +33,7 @@ export type Item = {
   supplier_id: string | null;
   track_serial: boolean;
   condition: "novo" | "seminovo";
+  warranty_months: number | null;
   active: boolean;
   created_by: string | null;
   created_at: string;
@@ -53,6 +54,17 @@ export type ItemSerial = {
   created_at: string;
   sold_at: string | null;
   removed_at: string | null;
+};
+
+export type Kit = {
+  id: string;
+  name: string;
+  kit_price: number;
+  items: { item_id: string; quantity: number }[];
+  active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type Supplier = {
@@ -197,10 +209,21 @@ export type SaleDashboard = {
   ticket_avg: number;
   interest: number;
   discounts: number;
+  trade_in_total: number;
   units_sold: number;
   by_payment: { method: SalePaymentMethod; amount: number; sales: number }[];
   by_seller: { seller: string; revenue: number; sales: number }[];
   daily: { day: string; revenue: number; sales: number }[];
+};
+
+export type ItemSalesRankingRow = {
+  item_id: string;
+  name: string;
+  category: string | null;
+  manufacturer: string | null;
+  units_sold: number;
+  revenue: number;
+  share_percent: number;
 };
 
 export type StockAlerts = {

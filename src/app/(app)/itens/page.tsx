@@ -16,6 +16,7 @@ interface Params {
   baixo?: string;
   inativos?: string;
   seminovos?: string;
+  categoria?: string;
   pagina?: string;
 }
 
@@ -27,12 +28,18 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
   const onlyLow = params.baixo === "1";
   const showInactive = params.inativos === "1";
   const onlyUsed = params.seminovos === "1";
+  const category = (params.categoria ?? "").trim();
   const manager = isManager(employee.role);
+
+  // Categorias existentes pra popular o filtro (loja vende relógio, celular, acessório etc.).
+  const { data: categoryRows } = await supabase.from("items").select("category").not("category", "is", null).order("category");
+  const categories = [...new Set((categoryRows ?? []).map((r) => r.category as string).filter(Boolean))];
 
   let query = supabase.from("items").select("*", { count: "exact" }).order("name");
 
   if (!showInactive) query = query.eq("active", true);
   if (onlyUsed) query = query.eq("condition", "seminovo");
+  if (category) query = query.eq("category", category);
 
   if (q) {
     // vírgula, parênteses e aspas quebrariam a sintaxe do filtro `or`; % e _ viram texto literal
@@ -66,10 +73,15 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-foreground">Produtos</h1>
         {manager && (
-          <Link href="/itens/novo" className="btn-primary">
-            <Plus size={16} />
-            Novo produto
-          </Link>
+          <div className="flex gap-2">
+            <Link href="/itens/kits" className="btn-secondary">
+              Kits e combos
+            </Link>
+            <Link href="/itens/novo" className="btn-primary">
+              <Plus size={16} />
+              Novo produto
+            </Link>
+          </div>
         )}
       </div>
 
@@ -81,6 +93,16 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
         <label className="flex items-center gap-2 text-sm text-foreground">
           <input type="checkbox" name="baixo" value="1" defaultChecked={onlyLow} /> Estoque baixo / esgotado
         </label>
+        {categories.length > 0 && (
+          <select name="categoria" defaultValue={category} className="input sm:w-44">
+            <option value="">Todas as categorias</option>
+            {categories.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        )}
         <label className="flex items-center gap-2 text-sm text-foreground">
           <input type="checkbox" name="seminovos" value="1" defaultChecked={onlyUsed} /> Só seminovos
         </label>
@@ -102,6 +124,7 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
           q: q || undefined,
           baixo: onlyLow ? "1" : undefined,
           seminovos: onlyUsed ? "1" : undefined,
+          categoria: category || undefined,
           inativos: showInactive ? "1" : undefined,
         }}
       />

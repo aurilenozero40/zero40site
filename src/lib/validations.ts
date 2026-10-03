@@ -35,6 +35,10 @@ export const itemSchema = z.object({
   supplier_id: optionalText,
   track_serial: z.boolean().default(false),
   condition: z.enum(["novo", "seminovo"]).default("novo"),
+  warranty_months: optionalNumber.refine(
+    (v) => v === null || v === undefined || (Number.isInteger(v) && v > 0),
+    "Garantia deve ser um número inteiro de meses maior que zero"
+  ),
 });
 
 export type ItemInput = z.input<typeof itemSchema>;

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Package, ScanBarcode, Trash2, X } from "lucide-react";
 import { createStockEntryAction, createSupplierQuickAction, type SupplierHit } from "@/app/(app)/movimentacoes/actions";
+import { createItemQuickAction } from "@/app/(app)/itens/actions";
 import { normalizeBarcode } from "@/lib/barcode";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Item } from "@/lib/types";
@@ -37,6 +38,13 @@ interface PendingSerial {
   supplierName: string;
 }
 
+interface NewItemDraft {
+  name: string;
+  sku: string;
+  salePrice: string;
+  trackSerial: boolean;
+}
+
 const parseNumber = (text: string) => {
   const n = Number(text.replace(",", ".").trim());
   return Number.isFinite(n) ? n : 0;
@@ -51,6 +59,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
+  const [localItems, setLocalItems] = useState(items);
   const [subtype, setSubtype] = useState("compra");
   const [reason, setReason] = useState("");
   const [lines, setLines] = useState<EntryLine[]>([]);
@@ -59,6 +68,13 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
 
   const [barcodeInput, setBarcodeInput] = useState("");
   const barcodeRef = useRef<HTMLInputElement>(null);
+
+  // Código bipado que ainda não existe no catálogo: cadastra ali mesmo, sem trocar de tela.
+  const [pendingNewItem, setPendingNewItem] = useState<string | null>(null); // guarda o código de barras
+  const [newItemDraft, setNewItemDraft] = useState<NewItemDraft>({ name: "", sku: "", salePrice: "", trackSerial: false });
+  const [newItemPending, setNewItemPending] = useState(false);
+  const [newItemError, setNewItemError] = useState<string | null>(null);
+  const newItemNameRef = useRef<HTMLInputElement>(null);
 
   const [localSuppliers, setLocalSuppliers] = useState(suppliers);
   const [pendingSupplier, setPendingSupplier] = useState<PendingSupplier | null>(null);
@@ -79,6 +95,9 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
   useEffect(() => {
     if (pendingSupplier) supplierRef.current?.focus();
   }, [pendingSupplier]);
+  useEffect(() => {
+    if (pendingNewItem) newItemNameRef.current?.focus();
+  }, [pendingNewItem]);
   useEffect(() => {
     if (!notice || notice.kind === "error") return;
     const t = setTimeout(() => setNotice(null), 3000);
@@ -127,13 +146,37 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
   function handleBarcodeScan() {
     const normalized = normalizeBarcode(barcodeInput);
     if (!normalized) return;
-    const found = items.find((i) => normalizeBarcode(i.barcode) === normalized);
+    const found = localItems.find((i) => normalizeBarcode(i.barcode) === normalized);
     setBarcodeInput("");
     if (!found) {
-      setNotice({ kind: "error", text: `Nenhum item ativo com esse código de barras. Confira ou cadastre o item.` });
+      // Código novo: cadastra o produto ali mesmo em vez de travar o usuário numa tela vazia.
+      setPendingNewItem(normalized);
+      setNewItemDraft({ name: "", sku: "", salePrice: "", trackSerial: false });
+      setNewItemError(null);
       return;
     }
     handleFoundItem(found);
+  }
+
+  async function submitNewItem() {
+    if (!pendingNewItem) return;
+    const name = newItemDraft.name.trim();
+    if (!name) return setNewItemError("Informe o nome do produto.");
+    setNewItemError(null);
+    setNewItemPending(true);
+    const r = await createItemQuickAction({
+      name,
+      sku: newItemDraft.sku || null,
+      barcode: pendingNewItem,
+      salePrice: newItemDraft.salePrice ? Number(newItemDraft.salePrice.replace(",", ".")) : null,
+      trackSerial: newItemDraft.trackSerial,
+    });
+    setNewItemPending(false);
+    if (!r.ok) return setNewItemError(r.error);
+    setLocalItems((prev) => [...prev, r.data]);
+    setPendingNewItem(null);
+    setNotice({ kind: "ok", text: `${r.data.name} cadastrado.` });
+    handleFoundItem(r.data);
   }
 
   // Escolher o fornecedor já avança sozinho — sem precisar de um clique extra em "Confirmar".
@@ -253,7 +296,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
             autoFocus
             autoComplete="off"
             inputMode="numeric"
-            disabled={!!pendingSupplier || !!pendingSerial}
+            disabled={!!pendingSupplier || !!pendingSerial || !!pendingNewItem}
             className="input h-11 pl-10 text-base disabled:opacity-50"
             placeholder="Bipe o código de barras do produto"
             value={barcodeInput}
@@ -273,6 +316,99 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
           </p>
         )}
       </div>
+
+      {pendingNewItem && (
+        <div className="card flex flex-col gap-3 border-accent/40 bg-accent/5">
+          <div>
+            <p className="text-sm font-medium text-foreground">Produto novo — código de barras {pendingNewItem}</p>
+            <p className="text-xs text-muted">Esse código ainda não está cadastrado. Preencha o essencial aqui — dá pra completar o resto depois em Produtos.</p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="sm:col-span-2">
+              <label className="label" htmlFor="new_item_name">
+                Nome *
+              </label>
+              <input
+                id="new_item_name"
+                ref={newItemNameRef}
+                className="input"
+                value={newItemDraft.name}
+                onChange={(e) => setNewItemDraft((d) => ({ ...d, name: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void submitNewItem();
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="new_item_sku">
+                SKU
+              </label>
+              <input
+                id="new_item_sku"
+                className="input"
+                value={newItemDraft.sku}
+                onChange={(e) => setNewItemDraft((d) => ({ ...d, sku: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void submitNewItem();
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="new_item_price">
+                Preço de venda (R$)
+              </label>
+              <input
+                id="new_item_price"
+                inputMode="decimal"
+                className="input"
+                placeholder="0,00"
+                value={newItemDraft.salePrice}
+                onChange={(e) => setNewItemDraft((d) => ({ ...d, salePrice: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void submitNewItem();
+                  }
+                }}
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm text-foreground sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={newItemDraft.trackSerial}
+                onChange={(e) => setNewItemDraft((d) => ({ ...d, trackSerial: e.target.checked }))}
+              />
+              Esse produto tem número de série (IMEI)
+            </label>
+          </div>
+          {newItemError && (
+            <p role="alert" className="flex items-center gap-1.5 text-sm font-medium text-danger">
+              <AlertTriangle size={14} /> {newItemError}
+            </p>
+          )}
+          <div className="flex gap-2">
+            <button type="button" className="btn-primary" disabled={newItemPending || !newItemDraft.name.trim()} onClick={submitNewItem}>
+              {newItemPending ? "Cadastrando..." : "Cadastrar e continuar"}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setPendingNewItem(null);
+                barcodeRef.current?.focus();
+              }}
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
 
       {pendingSupplier && (
         <div className="card flex flex-col gap-2 border-accent/40 bg-accent/5">

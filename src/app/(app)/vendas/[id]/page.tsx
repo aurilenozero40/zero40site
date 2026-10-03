@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CheckCircle2, Plus } from "lucide-react";
+import { CheckCircle2, Plus, Receipt } from "lucide-react";
 import { requireEmployee } from "@/lib/auth/session";
 import { isManager } from "@/lib/roles";
 import { SaleActions } from "@/components/sales/SaleActions";
@@ -19,7 +19,7 @@ type SaleDetail = Sale & {
   canceller: { full_name: string } | null;
   customer: { id: string; name: string; document: string | null; phone: string | null } | null;
   trade_in_item: { id: string; name: string; active: boolean } | null;
-  sale_items: (SaleItem & { items: { track_serial: boolean } | null })[];
+  sale_items: (SaleItem & { items: { track_serial: boolean; warranty_months: number | null } | null })[];
   sale_payments: SalePayment[];
 };
 
@@ -55,7 +55,7 @@ export default async function VendaDetalhePage({
   const { data, error } = await supabase
     .from("sales")
     .select(
-      "*, seller:employees!sales_seller_id_fkey(full_name), canceller:employees!sales_cancelled_by_fkey(full_name), customer:customers(id, name, document, phone), trade_in_item:items!sales_trade_in_item_id_fkey(id, name, active), sale_items(*, items(track_serial)), sale_payments(*)"
+      "*, seller:employees!sales_seller_id_fkey(full_name), canceller:employees!sales_cancelled_by_fkey(full_name), customer:customers(id, name, document, phone), trade_in_item:items!sales_trade_in_item_id_fkey(id, name, active), sale_items(*, items(track_serial, warranty_months)), sale_payments(*)"
     )
     .eq("id", id)
     .maybeSingle();
@@ -114,23 +114,28 @@ export default async function VendaDetalhePage({
             {formatDate(sale.created_at, true)} · vendedor {sale.seller?.full_name ?? "—"}
           </p>
         </div>
-        {manager && (
-          <SaleActions
-            saleId={sale.id}
-            code={code}
-            status={sale.status}
-            total={Number(sale.total)}
-            items={items.map((i) => ({
-              id: i.id,
-              name: i.item_name,
-              unit: "",
-              quantity: Number(i.quantity),
-              returned: Number(i.returned_quantity),
-              trackSerial: i.items?.track_serial ?? false,
-              soldSerials: serialsBySaleItem.get(i.id) ?? [],
-            }))}
-          />
-        )}
+        <div className="flex flex-wrap items-start gap-2">
+          <Link href={`/recibo/${sale.id}`} target="_blank" className="btn-secondary">
+            <Receipt size={15} /> Ver recibo
+          </Link>
+          {manager && (
+            <SaleActions
+              saleId={sale.id}
+              code={code}
+              status={sale.status}
+              total={Number(sale.total)}
+              items={items.map((i) => ({
+                id: i.id,
+                name: i.item_name,
+                unit: "",
+                quantity: Number(i.quantity),
+                returned: Number(i.returned_quantity),
+                trackSerial: i.items?.track_serial ?? false,
+                soldSerials: serialsBySaleItem.get(i.id) ?? [],
+              }))}
+            />
+          )}
+        </div>
       </div>
 
       {sale.status === "cancelada" && (
@@ -164,6 +169,9 @@ export default async function VendaDetalhePage({
                       <p className="font-mono text-xs text-muted">{[i.item_sku, i.item_barcode].filter(Boolean).join(" · ")}</p>
                       {i.items?.track_serial && (
                         <p className="font-mono text-xs text-muted">{(serialsBySaleItem.get(i.id) ?? []).join(", ") || "—"}</p>
+                      )}
+                      {i.items?.warranty_months && (
+                        <p className="text-xs text-muted">Garantia até {formatDate(warrantyExpiry(sale.created_at, i.items.warranty_months))}</p>
                       )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
@@ -270,6 +278,12 @@ export default async function VendaDetalhePage({
       </div>
     </div>
   );
+}
+
+function warrantyExpiry(saleCreatedAt: string, months: number) {
+  const d = new Date(saleCreatedAt);
+  d.setMonth(d.getMonth() + months);
+  return d;
 }
 
 function Line({ label, value, className, strong }: { label: string; value: string; className?: string; strong?: boolean }) {

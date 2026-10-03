@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { X } from "lucide-react";
 import { isValidGtin } from "@/lib/barcode";
 import type { Item, Supplier } from "@/lib/types";
 import type { ActionState } from "@/app/(app)/itens/actions";
@@ -20,6 +21,8 @@ export function ItemForm({
   const [state, formAction, pending] = useActionState<ActionState, FormData>(action, null);
   const [barcode, setBarcode] = useState(item?.barcode ?? "");
   const [trackSerial, setTrackSerial] = useState(item?.track_serial ?? false);
+  const [initialSerials, setInitialSerials] = useState<string[]>([]);
+  const [serialInput, setSerialInput] = useState("");
 
   // Só avisa (não bloqueia): códigos internos/alfanuméricos são válidos, mas um
   // código numérico de 8/12/13/14 dígitos com verificador errado é quase
@@ -182,6 +185,56 @@ export function ItemForm({
             nova entrada bipando os seriais das unidades que já estão na loja — senão elas não poderão ser vendidas.
           </p>
         )}
+
+        {!item && trackSerial && (
+          <div className="mt-2 flex flex-col gap-2 border-t border-border pt-3">
+            <input type="hidden" name="initial_serials" value={JSON.stringify(initialSerials)} />
+            <label className="label" htmlFor="initial_serial_input">
+              Número de série (opcional — já dá entrada no estoque)
+            </label>
+            <div className="flex gap-2">
+              <input
+                id="initial_serial_input"
+                autoComplete="off"
+                className="input flex-1"
+                placeholder="Bipe ou digite o número de série e aperte Enter"
+                value={serialInput}
+                onChange={(e) => setSerialInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const s = serialInput.trim();
+                    if (!s) return;
+                    if (initialSerials.includes(s)) return setSerialInput("");
+                    setInitialSerials((prev) => [...prev, s]);
+                    setSerialInput("");
+                  }
+                }}
+              />
+            </div>
+            <p className="text-xs text-muted">
+              Se já tiver a(s) unidade(s) em mãos, bipe o(s) serial(is) aqui — o produto já nasce com essas unidades em
+              estoque. Se preferir, deixe em branco e dê entrada depois em Movimentações.
+            </p>
+            {initialSerials.length > 0 && (
+              <ul className="flex flex-wrap gap-1.5">
+                {initialSerials.map((s) => (
+                  <li key={s} className="flex items-center gap-1 rounded-full bg-accent/10 px-2.5 py-1 font-mono text-xs text-foreground">
+                    {s}
+                    <button
+                      type="button"
+                      onClick={() => setInitialSerials((prev) => prev.filter((x) => x !== s))}
+                      aria-label={`Remover ${s}`}
+                      className="text-muted hover:text-danger"
+                    >
+                      <X size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -276,6 +329,23 @@ export function ItemForm({
             className="input"
             defaultValue={item?.max_stock ?? ""}
           />
+        </div>
+
+        <div>
+          <label className="label" htmlFor="warranty_months">
+            Garantia (meses)
+          </label>
+          <input
+            id="warranty_months"
+            name="warranty_months"
+            type="number"
+            step="1"
+            min="1"
+            className="input"
+            defaultValue={item?.warranty_months ?? ""}
+            placeholder="Ex: 12"
+          />
+          <p className="mt-1 text-xs text-muted">Em branco = sem garantia controlada pelo sistema.</p>
         </div>
 
         <div>

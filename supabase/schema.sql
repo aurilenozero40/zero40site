@@ -115,6 +115,7 @@ create table if not exists public.items (
   supplier_id   uuid references public.suppliers(id) on delete set null,
   track_serial  boolean not null default false,       -- true: cada unidade tem número de série/IMEI próprio
   condition     text not null default 'novo' check (condition in ('novo', 'seminovo')),
+  warranty_months integer check (warranty_months is null or warranty_months > 0),   -- null = sem garantia controlada
   active        boolean not null default true,
   created_by    uuid references public.employees(id) default auth.uid(),
   created_at    timestamptz not null default now(),
@@ -125,6 +126,22 @@ create index if not exists idx_items_active   on public.items (active);
 create index if not exists idx_items_category on public.items (category);
 create index if not exists idx_items_sku      on public.items (sku);
 create index if not exists idx_items_name     on public.items (lower(name));
+
+-- ---- 1.3b kits (combos): vários produtos vendidos juntos por um preço especial ----
+-- Não é um "produto" novo no estoque — ao vender, cada item do kit baixa do SEU PRÓPRIO
+-- estoque normalmente; o preço especial do kit vira desconto na venda (create_sale de sempre).
+create table if not exists public.kits (
+  id         uuid primary key default gen_random_uuid(),
+  name       text not null,
+  kit_price  numeric(12,2) not null check (kit_price >= 0),
+  items      jsonb not null,    -- [{ "item_id": uuid, "quantity": n }]
+  active     boolean not null default true,
+  created_by uuid references public.employees(id) default auth.uid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_kits_active on public.kits (active);
 
 -- ---- 1.4 movements: ledger de estoque (só insert; nunca update/delete) -----------
 --   type    : entrada | saida | ajuste
@@ -184,6 +201,12 @@ alter table public.employees add column if not exists username text;
 alter table public.items     add column if not exists description text;
 alter table public.items     add column if not exists track_serial boolean not null default false;
 alter table public.items     add column if not exists condition text not null default 'novo';
+alter table public.items     add column if not exists warranty_months integer;
+do $$
+begin
+  alter table public.items add constraint items_warranty_months_check check (warranty_months is null or warranty_months > 0);
+exception when duplicate_object then null;
+end $$;
 do $$
 begin
   alter table public.items add constraint items_condition_check check (condition in ('novo', 'seminovo'));
@@ -893,6 +916,7 @@ alter table public.sale_payments       enable row level security;
 alter table public.audit_logs          enable row level security;
 alter table public.notification_outbox enable row level security;
 alter table public.item_serials        enable row level security;
+alter table public.kits                enable row level security;
 
 -- Recria TODAS as policies (os nomes em bancos antigos divergiam do repositório).
 do $$
@@ -903,7 +927,7 @@ begin
     where schemaname = 'public'
       and tablename in ('employees','suppliers','items','movements','card_fee_rates','app_settings',
                         'customers','sales','sale_items','sale_payments','audit_logs','notification_outbox',
-                        'item_serials')
+                        'item_serials','kits')
   loop
     execute format('drop policy %I on %I.%I', p.policyname, p.schemaname, p.tablename);
   end loop;
@@ -924,6 +948,10 @@ create policy items_select on public.items for select using (auth.uid() is not n
 create policy items_insert on public.items for insert with check (public.is_manager());
 create policy items_update on public.items for update using (public.is_manager()) with check (public.is_manager());
 create policy items_delete on public.items for delete using (public.is_admin());
+
+-- kits: leitura pra todos (pro PDV montar o combo); cadastro/edição só gerente+.
+create policy kits_select on public.kits for select using (auth.uid() is not null);
+create policy kits_write on public.kits for all using (public.is_manager()) with check (public.is_manager());
 
 -- movements: leitura para todos; toda escrita (venda, cancelamento, lançamento manual) nasce
 -- só pelas funções de negócio (create_sale, cancel_sale, return_sale_items, create_movement) —
@@ -1807,7 +1835,8 @@ as $$
     select coalesce(sum(total - refunded_amount), 0) as revenue,
            count(*) filter (where status <> 'devolvida') as sales_count,
            coalesce(sum(interest_amount), 0) as interest,
-           coalesce(sum(discount_amount), 0) as discounts
+           coalesce(sum(discount_amount), 0) as discounts,
+           coalesce(sum(trade_in_amount), 0) as trade_in_total
       from s
   ),
   units as (
@@ -1837,6 +1866,7 @@ as $$
     'ticket_avg', (select case when sales_count = 0 then 0 else round(revenue / sales_count, 2) end from kpi),
     'interest', (select interest from kpi),
     'discounts', (select discounts from kpi),
+    'trade_in_total', (select trade_in_total from kpi),
     'units_sold', (select units_sold from units),
     'by_payment', coalesce((select jsonb_agg(jsonb_build_object('method', method, 'amount', round(amount, 2), 'sales', sales) order by amount desc) from pay), '[]'::jsonb),
     'by_seller',  coalesce((select jsonb_agg(jsonb_build_object('seller', seller, 'revenue', revenue, 'sales', sales) order by revenue desc) from sellers), '[]'::jsonb),
@@ -1874,6 +1904,7 @@ $$;
 
 -- Participação de cada produto no faturamento (% de vendas) — só gerente+ vê (RLS de sales:
 -- SECURITY INVOKER, então um vendedor chamando isso só enxergaria as próprias vendas).
+-- Traz categoria/marca junto pra dar pra agrupar na tela (relatório por categoria/marca).
 create or replace function public.item_sales_ranking()
 returns jsonb
 language sql stable
@@ -1888,9 +1919,11 @@ as $$
      where s.status in ('concluida', 'parcialmente_devolvida', 'devolvida')
   ),
   agg as (
-    select item_id, item_name, sum(net_qty) as units_sold, sum(net_revenue) as revenue
-      from lines
-     group by item_id, item_name
+    select l.item_id, l.item_name, i.category, i.manufacturer,
+           sum(l.net_qty) as units_sold, sum(l.net_revenue) as revenue
+      from lines l
+      left join public.items i on i.id = l.item_id
+     group by l.item_id, l.item_name, i.category, i.manufacturer
   ),
   total as (
     select coalesce(sum(revenue), 0) as revenue from agg
@@ -1899,6 +1932,7 @@ as $$
     jsonb_agg(
       jsonb_build_object(
         'item_id', agg.item_id, 'name', agg.item_name,
+        'category', agg.category, 'manufacturer', agg.manufacturer,
         'units_sold', trim_scale(agg.units_sold), 'revenue', round(agg.revenue, 2),
         'share_percent', case when total.revenue = 0 then 0 else round(agg.revenue / total.revenue * 100, 2) end
       )

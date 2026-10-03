@@ -16,6 +16,30 @@ export default function RelatoriosLayout({ children }: { children: React.ReactNo
         >
           Saídas
         </Link>
+        <Link
+          href="/relatorios/caixa"
+          className="rounded-md px-3 py-1.5 text-sm font-medium text-muted hover:bg-surface hover:text-foreground"
+        >
+          Caixa
+        </Link>
+        <Link
+          href="/relatorios/categorias"
+          className="rounded-md px-3 py-1.5 text-sm font-medium text-muted hover:bg-surface hover:text-foreground"
+        >
+          Categorias
+        </Link>
+        <Link
+          href="/relatorios/reposicao"
+          className="rounded-md px-3 py-1.5 text-sm font-medium text-muted hover:bg-surface hover:text-foreground"
+        >
+          Reposição
+        </Link>
+        <Link
+          href="/relatorios/garantias"
+          className="rounded-md px-3 py-1.5 text-sm font-medium text-muted hover:bg-surface hover:text-foreground"
+        >
+          Garantias
+        </Link>
       </div>
       {children}
     </div>

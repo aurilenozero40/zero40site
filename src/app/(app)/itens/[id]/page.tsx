@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { Power } from "lucide-react";
+import { AlertTriangle, Power } from "lucide-react";
 import { requireEmployee } from "@/lib/auth/session";
 import { isManager } from "@/lib/roles";
 import { ItemForm } from "@/components/items/ItemForm";
@@ -52,10 +52,13 @@ const fmt = (field: string, v: unknown) =>
 
 export default async function ItemDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ aviso?: string }>;
 }) {
   const { id } = await params;
+  const { aviso } = await searchParams;
   const { supabase, employee } = await requireEmployee();
   const manager = isManager(employee.role);
 
@@ -100,6 +103,15 @@ export default async function ItemDetailPage({
 
   return (
     <div className="flex flex-col gap-8">
+      {aviso && (
+        <div className="card flex items-start gap-2 border-warning/40 bg-warning/5 text-sm">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
+          <p>
+            Produto cadastrado, mas a entrada de estoque com o(s) número(s) de série não foi registrada: {aviso}. Dê
+            entrada manualmente em <Link href={`/movimentacoes/nova?item=${id}`} className="font-medium underline">Movimentações</Link>.
+          </p>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <Link href="/itens" className="text-xs text-muted hover:underline">
