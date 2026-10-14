@@ -6,15 +6,24 @@ import { LowStockBadge } from "./LowStockBadge";
 /** Estoque baixo: mínimo definido e saldo <= mínimo (mesma regra do banco). */
 export const isLowStock = (item: Pick<Item, "quantity" | "min_stock">) => item.min_stock > 0 && item.quantity <= item.min_stock;
 
+const ABC_CLASS: Record<"A" | "B" | "C", string> = {
+  A: "bg-success/10 text-success",
+  B: "bg-warning/10 text-warning",
+  C: "bg-muted/20 text-muted",
+};
+
 export function ItemsTable({
   items,
   showCost,
   salesShare,
+  abcClass,
 }: {
   items: Item[];
   showCost: boolean;
   /** % de participação nas vendas (id do item → %), só pra quem pode ver (gerente+). */
   salesShare?: Map<string, number>;
+  /** classe ABC (curva de Pareto do faturamento) — A = carro-chefe, C = cauda longa. */
+  abcClass?: Map<string, "A" | "B" | "C">;
 }) {
   const colCount = 7 + (showCost ? 1 : 0) + (salesShare ? 1 : 0);
   return (
@@ -43,6 +52,20 @@ export function ItemsTable({
                   <Link href={`/itens/${item.id}`} className="hover:underline">
                     {item.name}
                   </Link>
+                  {abcClass?.get(item.id) && (
+                    <span
+                      className={`ml-2 rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${ABC_CLASS[abcClass.get(item.id)!]}`}
+                      title={
+                        abcClass.get(item.id) === "A"
+                          ? "Classe A: carro-chefe, responde pela maior parte do faturamento"
+                          : abcClass.get(item.id) === "B"
+                            ? "Classe B: vendas medianas"
+                            : "Classe C: vendas baixas (cauda longa)"
+                      }
+                    >
+                      {abcClass.get(item.id)}
+                    </span>
+                  )}
                   {item.condition === "seminovo" && (
                     <span className="ml-2 rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning">Seminovo</span>
                   )}

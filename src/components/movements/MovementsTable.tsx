@@ -20,6 +20,19 @@ const PAYMENT_LABEL: Record<string, string> = {
   cartao: "Cartão",
 };
 
+const SUBTYPE_LABEL: Record<string, string> = {
+  compra: "Compra",
+  devolucao: "Devolução",
+  transferencia: "Transferência",
+  cancelamento: "Cancelamento",
+  troca: "Entrada (troca)",
+  uso: "Uso interno",
+  perda: "Perda",
+  venda: "Venda",
+  emprestimo: "Empréstimo",
+  outros: "Outros",
+};
+
 export function MovementsTable({
   movements,
   showItem = true,
@@ -55,7 +68,7 @@ export function MovementsTable({
                   className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${TYPE_CLASS[m.type]}`}
                 >
                   {TYPE_LABEL[m.type]}
-                  {m.subtype ? ` · ${m.subtype}` : ""}
+                  {m.subtype ? ` · ${SUBTYPE_LABEL[m.subtype] ?? m.subtype}` : ""}
                 </span>
               </td>
               <td className="px-4 py-3 tabular-nums">{formatQuantity(m.quantity, m.items?.unit)}</td>

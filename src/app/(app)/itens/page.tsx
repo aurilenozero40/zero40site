@@ -61,11 +61,19 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
       `[itens] erro ao buscar items: code=${error.code} message=${error.message} details=${error.details} hint=${error.hint}`
     );
 
-  // % de participação nas vendas — só gerente+ (o próprio banco só devolveria as vendas do vendedor).
+  // % de participação nas vendas e classificação ABC (curva de Pareto) — só gerente+.
   const salesShare = new Map<string, number>();
+  const abcClass = new Map<string, "A" | "B" | "C">();
   if (manager) {
     const { data: ranking } = await supabase.rpc("item_sales_ranking");
-    for (const r of (ranking as { item_id: string; share_percent: number }[]) ?? []) salesShare.set(r.item_id, r.share_percent);
+    const rows = (ranking as { item_id: string; share_percent: number }[]) ?? [];
+    let cumulative = 0;
+    for (const r of rows) {
+      salesShare.set(r.item_id, r.share_percent);
+      cumulative += r.share_percent;
+      // A = primeiros 80% do faturamento · B = até 95% · C = o resto (cauda longa).
+      abcClass.set(r.item_id, cumulative <= 80 ? "A" : cumulative <= 95 ? "B" : "C");
+    }
   }
 
   return (
@@ -114,7 +122,7 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
         </button>
       </form>
 
-      <ItemsTable items={(items as Item[]) ?? []} showCost={manager} salesShare={manager ? salesShare : undefined} />
+      <ItemsTable items={(items as Item[]) ?? []} showCost={manager} salesShare={manager ? salesShare : undefined} abcClass={manager ? abcClass : undefined} />
       <Pagination
         page={page}
         pageSize={PAGE_SIZE}

@@ -87,7 +87,7 @@ export function Logo({
         </span>
         {showSubtitle && (
           <span className="mt-1 text-[10px] font-semibold uppercase tracking-[0.2em] opacity-70">
-            GPS e acessórios
+            Relógios e acessórios
           </span>
         )}
       </div>

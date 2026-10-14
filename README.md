@@ -1,6 +1,6 @@
 # Dtudo · Estoque e Vendas
 
-Plataforma interna da Dtudo GPS e Acessórios: produtos com código de barras, clientes, PDV (venda no balcão),
+Plataforma interna da Dtudo (relógios esportivos, celulares e acessórios): produtos com código de barras, clientes, PDV (venda no balcão),
 controle de estoque, auditoria e dashboard do CEO. O **Telegram só notifica** o dono — nada é registrado por lá.
 
 Next.js 16 (App Router) · Supabase (Postgres, Auth, Realtime) · Tailwind 4 · Vercel.

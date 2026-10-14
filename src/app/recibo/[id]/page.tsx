@@ -48,7 +48,7 @@ export default async function ReciboPage({ params }: { params: Promise<{ id: str
 
       <header className="flex items-start justify-between border-b border-black/20 pb-4">
         <div>
-          <h1 className="text-lg font-bold">Dtudo GPS e Acessórios</h1>
+          <h1 className="text-lg font-bold">Dtudo Relógios e Acessórios</h1>
           <p className="text-sm text-black/60">Recibo de venda</p>
         </div>
         <div className="text-right">

@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Dtudo | Controle de Estoque",
-  description: "Plataforma interna de controle de estoque da Dtudo GPS e Acessórios",
+  description: "Plataforma interna de controle de estoque da Dtudo",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
