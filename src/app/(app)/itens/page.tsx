@@ -93,33 +93,37 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
         )}
       </div>
 
-      <form method="get" className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="relative sm:max-w-sm sm:flex-1">
-          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-          <input name="q" defaultValue={q} className="input pl-9" placeholder="Nome, SKU, código de barras, categoria, marca..." />
+      <form method="get" className="card flex flex-col gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+            <input name="q" defaultValue={q} className="input pl-9" placeholder="Nome, SKU, código de barras, categoria, marca..." />
+          </div>
+          {categories.length > 0 && (
+            <select name="categoria" defaultValue={category} className="input sm:w-48">
+              <option value="">Todas as categorias</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          )}
+          <button type="submit" className="btn-secondary shrink-0">
+            Filtrar
+          </button>
         </div>
-        <label className="flex items-center gap-2 text-sm text-foreground">
-          <input type="checkbox" name="baixo" value="1" defaultChecked={onlyLow} /> Estoque baixo / esgotado
-        </label>
-        {categories.length > 0 && (
-          <select name="categoria" defaultValue={category} className="input sm:w-44">
-            <option value="">Todas as categorias</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        )}
-        <label className="flex items-center gap-2 text-sm text-foreground">
-          <input type="checkbox" name="seminovos" value="1" defaultChecked={onlyUsed} /> Só seminovos
-        </label>
-        <label className="flex items-center gap-2 text-sm text-foreground">
-          <input type="checkbox" name="inativos" value="1" defaultChecked={showInactive} /> Mostrar inativos
-        </label>
-        <button type="submit" className="btn-secondary">
-          Filtrar
-        </button>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3 text-sm text-foreground">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" name="baixo" value="1" defaultChecked={onlyLow} /> Estoque baixo / esgotado
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" name="seminovos" value="1" defaultChecked={onlyUsed} /> Só seminovos
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" name="inativos" value="1" defaultChecked={showInactive} /> Mostrar inativos
+          </label>
+        </div>
       </form>
 
       <ItemsTable items={(items as Item[]) ?? []} showCost={manager} salesShare={manager ? salesShare : undefined} abcClass={manager ? abcClass : undefined} />

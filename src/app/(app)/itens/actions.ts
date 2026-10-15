@@ -31,7 +31,7 @@ function parseFormData(formData: FormData) {
   };
 }
 
-export type ActionState = { error?: string } | null;
+export type ActionState = { error?: string; ok?: string; warning?: string; resetToken?: string } | null;
 
 // Traduz os erros crus do Postgres que o usuário realmente consegue causar.
 function friendlyItemError(error: { message: string; code?: string }) {
@@ -76,7 +76,7 @@ export async function createItem(_prev: ActionState, formData: FormData): Promis
     return { error: friendlyItemError(error) };
   }
 
-  let warning = "";
+  let warning: string | undefined;
   if (initialSerials.length > 0) {
     const { error: moveError } = await supabase.rpc("create_movement", {
       p_type: "entrada",
@@ -89,12 +89,14 @@ export async function createItem(_prev: ActionState, formData: FormData): Promis
       p_serials: initialSerials,
       p_supplier_id: null,
     });
-    if (moveError) warning = `?aviso=${encodeURIComponent(friendlyItemError(moveError))}`;
+    if (moveError) warning = friendlyItemError(moveError);
   }
 
   revalidatePath("/itens");
   revalidatePath("/movimentacoes");
-  redirect(`/itens/${newItem.id}${warning}`);
+  // Não navega pro detalhe: fica na tela de cadastro, já limpa, pronta pro próximo produto.
+  // resetToken muda a cada cadastro — é o que faz o formulário remontar limpo.
+  return { ok: parsed.data.name, warning, resetToken: crypto.randomUUID() };
 }
 
 export type QuickItemResult = { ok: true; data: Item } | { ok: false; error: string };

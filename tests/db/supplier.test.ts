@@ -20,6 +20,11 @@ const enter = (item: string, subtype: string, supplier: string | null) =>
     c.query("select public.create_movement('entrada', $1, 1, $2, null, null, null, null, $3) as r", [item, subtype, supplier])
   );
 
+const enterWithValue = (item: string, subtype: string, unitValue: number | null, supplier: string | null) =>
+  db.asUser(ids.manager, (c) =>
+    c.query("select public.create_movement('entrada', $1, 1, $2, $3, null, null, null, $4) as r", [item, subtype, unitValue, supplier])
+  );
+
 describe("seed de fornecedores", () => {
   it("já vêm cadastrados EUA, EUROPA, PRG e SP", async () => {
     const rows = await db.q<{ name: string }>("select name from suppliers order by name");
@@ -65,5 +70,34 @@ describe("fornecedor na entrada de estoque", () => {
     const item = await addItem(db, { name: "Relógio V" });
     await expect(enter(item, "transferencia", null)).resolves.toBeTruthy();
     await expect(enter(item, "devolucao", null)).resolves.toBeTruthy();
+  });
+});
+
+describe("custo na entrada de estoque (compra)", () => {
+  it("compra com valor unitário grava em items.cost_price — a próxima entrada já vem com esse valor pré-preenchido", async () => {
+    const item = await addItem(db, { name: "Relógio Custo A" });
+    const sp = await supplierId("SP");
+    await enterWithValue(item, "compra", 150.5, sp);
+    const row = await db.one<{ cost_price: string }>("select cost_price from items where id = $1", [item]);
+    expect(Number(row.cost_price)).toBe(150.5);
+  });
+
+  it("comprar de novo com valor diferente atualiza o custo lembrado", async () => {
+    const item = await addItem(db, { name: "Relógio Custo B" });
+    const sp = await supplierId("SP");
+    await enterWithValue(item, "compra", 100, sp);
+    await enterWithValue(item, "compra", 120, null);
+    const row = await db.one<{ cost_price: string }>("select cost_price from items where id = $1", [item]);
+    expect(Number(row.cost_price)).toBe(120);
+  });
+
+  it("devolução/transferência não mexem no custo lembrado (não é um preço de compra novo)", async () => {
+    const item = await addItem(db, { name: "Relógio Custo C" });
+    const sp = await supplierId("SP");
+    await enterWithValue(item, "compra", 200, sp);
+    await enterWithValue(item, "devolucao", 1, null);
+    await enterWithValue(item, "transferencia", 999, null);
+    const row = await db.one<{ cost_price: string }>("select cost_price from items where id = $1", [item]);
+    expect(Number(row.cost_price)).toBe(200);
   });
 });

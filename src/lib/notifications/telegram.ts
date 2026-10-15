@@ -2,47 +2,63 @@ import { NotificationError, type NotificationChannel, type RenderedMessage } fro
 
 export interface TelegramConfig {
   token?: string;
-  chatId?: string;
+  /** Lista de chat IDs (dono + gerentes/admins). Pode ser assíncrono (consulta ao banco). */
+  getRecipients?: () => Promise<string[]>;
   /** injetável para teste */
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
 
 /**
- * Canal Telegram. Token e chat ID vêm SEMPRE de variáveis de ambiente (TELEGRAM_BOT_TOKEN e
- * TELEGRAM_CEO_CHAT_ID) — nunca no código. Erros nunca carregam o token.
+ * Canal Telegram. Token vem SEMPRE de variável de ambiente (TELEGRAM_BOT_TOKEN) — nunca no
+ * código. Os destinatários (dono + gerentes/admins) vêm de `getRecipients` — cada um tem seu
+ * próprio chat ID cadastrado em employees.telegram_chat_id. Erros nunca carregam o token.
  */
 export class TelegramChannel implements NotificationChannel {
   readonly name = "telegram";
   private readonly token?: string;
-  private readonly chatId?: string;
+  private readonly getRecipients: () => Promise<string[]>;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
 
   constructor(config: TelegramConfig) {
     this.token = config.token?.trim() || undefined;
-    this.chatId = config.chatId?.trim() || undefined;
+    this.getRecipients = config.getRecipients ?? (async () => []);
     this.fetchImpl = config.fetchImpl ?? fetch;
     this.timeoutMs = config.timeoutMs ?? 10_000;
   }
 
   static fromEnv(env: Record<string, string | undefined> = process.env, fetchImpl?: typeof fetch) {
-    return new TelegramChannel({ token: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CEO_CHAT_ID, fetchImpl });
+    return new TelegramChannel({ token: env.TELEGRAM_BOT_TOKEN, fetchImpl });
   }
 
-  isConfigured() {
-    return Boolean(this.token && this.chatId);
+  async isConfigured() {
+    if (!this.token) return false;
+    const recipients = await this.getRecipients();
+    return recipients.length > 0;
   }
 
-  /** Envia para o chat do CEO (TELEGRAM_CEO_CHAT_ID). */
+  /** Envia para todos os destinatários cadastrados (dono + gerentes/admins). */
   async send(message: RenderedMessage): Promise<void> {
-    if (!this.token || !this.chatId) {
-      throw new NotificationError("Telegram não configurado (TELEGRAM_BOT_TOKEN / TELEGRAM_CEO_CHAT_ID).", true);
+    if (!this.token) {
+      throw new NotificationError("Telegram não configurado (TELEGRAM_BOT_TOKEN).", true);
     }
-    await this.sendTo(this.chatId, message);
+    const recipients = await this.getRecipients();
+    if (recipients.length === 0) {
+      throw new NotificationError("Telegram sem destinatários (nenhum employee com telegram_chat_id).", true);
+    }
+
+    const results = await Promise.allSettled(recipients.map((chatId) => this.sendTo(chatId, message)));
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failures.length === results.length) {
+      // ninguém recebeu: propaga o primeiro erro para decidir se vale retry
+      throw failures[0].reason;
+    }
+    // ao menos um destinatário recebeu — considera entregue (os outros falharam por motivo próprio,
+    // ex: bot bloqueado por aquele gerente específico, não vale travar a fila por isso)
   }
 
-  /** Envia para um chat específico (usado só para responder /start no webhook). */
+  /** Envia para um chat específico (usado para destinatários individuais e para o /start do webhook). */
   async sendTo(chatId: string | number, message: RenderedMessage): Promise<void> {
     if (!this.token) {
       throw new NotificationError("Telegram não configurado (TELEGRAM_BOT_TOKEN).", true);

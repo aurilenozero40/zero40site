@@ -5,8 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireEmployee } from "@/lib/auth/session";
 import { isAdmin } from "@/lib/roles";
 import { friendlyRpcError } from "@/lib/sales/errors";
-import { processNotifications } from "@/lib/notifications";
-import { TelegramChannel } from "@/lib/notifications/telegram";
+import { processNotifications, createTelegramChannel } from "@/lib/notifications";
 import { EVENT_TYPES } from "@/lib/notifications/types";
 
 export type SettingsState = { error?: string; ok?: boolean } | null;
@@ -49,12 +48,15 @@ export async function saveSettings(_prev: SettingsState, formData: FormData): Pr
   return { ok: true };
 }
 
-/** Envia uma mensagem de teste direto ao Telegram do CEO (confirma token e chat ID). */
+/** Envia uma mensagem de teste a todos os destinatários cadastrados (confirma token e chat IDs). */
 export async function sendTestNotificationAction(): Promise<ToolResult> {
   await requireAdminCtx();
-  const channel = TelegramChannel.fromEnv();
-  if (!channel.isConfigured()) {
-    return { ok: false, message: "Faltam TELEGRAM_BOT_TOKEN e/ou TELEGRAM_CEO_CHAT_ID nas variáveis de ambiente." };
+  const channel = createTelegramChannel();
+  if (!(await channel.isConfigured())) {
+    return {
+      ok: false,
+      message: "Falta TELEGRAM_BOT_TOKEN nas variáveis de ambiente, ou nenhum administrador/gerente tem chat ID cadastrado em Funcionários.",
+    };
   }
   try {
     await channel.send({ text: "<b>✅ Teste de notificação</b>\n\nSe você recebeu esta mensagem, o Telegram está configurado corretamente. As vendas e alertas de estoque chegarão aqui.", parseMode: "HTML" });

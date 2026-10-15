@@ -36,7 +36,13 @@ export default async function ConfiguracoesPage() {
   const keys = Array.from({ length: 19 }, (_, i) => i);
 
   const hasToken = Boolean(process.env.TELEGRAM_BOT_TOKEN);
-  const hasChat = Boolean(process.env.TELEGRAM_CEO_CHAT_ID);
+  const { count: recipientCount } = await supabase
+    .from("employees")
+    .select("id", { count: "exact", head: true })
+    .eq("active", true)
+    .in("role", ["ceo", "admin", "gerente"])
+    .not("telegram_chat_id", "is", null);
+  const hasChat = Boolean(recipientCount && recipientCount > 0);
   const rows = (outbox as unknown as (OutboxRow & { entity_type: string })[]) ?? [];
   const failed = rows.filter((r) => r.status === "failed").length;
 
@@ -47,14 +53,14 @@ export default async function ConfiguracoesPage() {
       <div className="card flex flex-col gap-4">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-foreground">Telegram do CEO</h2>
+            <h2 className="text-sm font-semibold text-foreground">Telegram (avisos)</h2>
             <p className="text-xs text-muted">O Telegram só avisa: vendas e movimentações são feitas aqui na plataforma.</p>
           </div>
         </div>
 
         <ul className="flex flex-col gap-1.5 text-sm">
           <Status ok={hasToken} label="TELEGRAM_BOT_TOKEN" hint="token do bot (criado no @BotFather)" />
-          <Status ok={hasChat} label="TELEGRAM_CEO_CHAT_ID" hint="chat que recebe os avisos (mande /start ao bot para descobrir o número)" />
+          <Status ok={hasChat} label="Destinatários" hint="pelo menos um admin/gerente/dono com chat ID cadastrado em Funcionários" />
           <Status ok={Boolean(process.env.CRON_SECRET)} label="CRON_SECRET" hint="protege o reenvio automático das falhas" optional />
         </ul>
 
@@ -64,8 +70,8 @@ export default async function ConfiguracoesPage() {
             <ol className="list-inside list-decimal space-y-0.5">
               <li>No Telegram, fale com o <strong>@BotFather</strong>, crie um bot e copie o token.</li>
               <li>Coloque o token em <code>TELEGRAM_BOT_TOKEN</code> (Vercel → Environment Variables e no <code>.env.local</code>).</li>
-              <li>Abra o bot e mande <code>/start</code>. Ele responde o seu <strong>chat ID</strong> (se o webhook estiver registrado).</li>
-              <li>Coloque esse número em <code>TELEGRAM_CEO_CHAT_ID</code> e reinicie/redeploy.</li>
+              <li>Cada dono/gerente/admin abre o bot e manda <code>/start</code>. Ele responde o <strong>chat ID</strong> (se o webhook estiver registrado).</li>
+              <li>Um administrador cola esse número em <strong>Funcionários</strong>, no campo &quot;Telegram&quot; da pessoa.</li>
             </ol>
           </div>
         )}

@@ -24,9 +24,32 @@ export function createSupabaseOutboxStore(admin: SupabaseClient): OutboxStore {
   };
 }
 
+/** Dono + gerentes/admins ativos que já cadastraram seu chat ID (/start no bot). */
+async function getTelegramRecipients(admin: SupabaseClient): Promise<string[]> {
+  const { data, error } = await admin
+    .from("employees")
+    .select("telegram_chat_id")
+    .eq("active", true)
+    .in("role", ["ceo", "admin", "gerente"])
+    .not("telegram_chat_id", "is", null);
+  if (error) throw new Error(`employees (telegram_chat_id): ${error.message}`);
+  return (data ?? [])
+    .map((row) => row.telegram_chat_id as string | null)
+    .filter((id): id is string => Boolean(id && id.trim()));
+}
+
+/** Canal Telegram com os destinatários reais (dono + gerentes/admins ativos). */
+export function createTelegramChannel(admin: SupabaseClient = createAdminClient()) {
+  return new TelegramChannel({
+    token: process.env.TELEGRAM_BOT_TOKEN,
+    getRecipients: () => getTelegramRecipients(admin),
+  });
+}
+
 export function createNotificationService() {
-  return new NotificationService(createSupabaseOutboxStore(createAdminClient()), {
-    telegram: TelegramChannel.fromEnv(),
+  const admin = createAdminClient();
+  return new NotificationService(createSupabaseOutboxStore(admin), {
+    telegram: createTelegramChannel(admin),
   });
 }
 

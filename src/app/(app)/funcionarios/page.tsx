@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Plus } from "lucide-react";
 import { requireAdmin } from "@/lib/auth/session";
 import { EmployeeRoleForm } from "@/components/employees/EmployeeRoleForm";
+import { EmployeeTelegramForm } from "@/components/employees/EmployeeTelegramForm";
 import type { Employee } from "@/lib/types";
 import { toggleEmployeeActive } from "./actions";
 
@@ -33,6 +34,7 @@ export default async function FuncionariosPage() {
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">
               <th className="px-4 py-3">Nome</th>
               <th className="px-4 py-3">Papel</th>
+              <th className="px-4 py-3">Telegram (avisos)</th>
               <th className="px-4 py-3">Status</th>
             </tr>
           </thead>
@@ -48,6 +50,9 @@ export default async function FuncionariosPage() {
                   </td>
                   <td className="px-4 py-3">
                     <EmployeeRoleForm employeeId={emp.id} role={emp.role} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <EmployeeTelegramForm employeeId={emp.id} chatId={emp.telegram_chat_id} />
                   </td>
                   <td className="px-4 py-3">
                     <form action={toggle}>
@@ -68,6 +73,15 @@ export default async function FuncionariosPage() {
             })}
           </tbody>
         </table>
+      </div>
+
+      <div className="card text-xs text-muted">
+        <p className="mb-1 font-medium text-foreground">Avisos no Telegram</p>
+        <p>
+          Dono, administradores e gerentes ativos com um chat ID cadastrado recebem avisos automáticos (ex: produto
+          esgotado). Para pegar o chat ID: a pessoa manda <strong>/start</strong> para o bot da loja no Telegram, ele
+          responde com o número, e um administrador cola esse número aqui.
+        </p>
       </div>
 
       <div className="card text-xs text-muted">

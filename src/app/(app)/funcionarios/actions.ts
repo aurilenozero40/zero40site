@@ -34,6 +34,25 @@ export async function updateEmployeeRole(
   return { ok: true };
 }
 
+export async function updateEmployeeTelegramChatId(
+  employeeId: string,
+  _prev: EmployeeActionState,
+  formData: FormData
+): Promise<EmployeeActionState> {
+  const { supabase } = await requireAdminAction();
+  const raw = String(formData.get("telegram_chat_id") ?? "").trim();
+  if (raw && !/^-?\d+$/.test(raw)) return { error: "O chat ID é só números (o bot informa isso no /start)." };
+
+  const { error } = await supabase
+    .from("employees")
+    .update({ telegram_chat_id: raw || null })
+    .eq("id", employeeId);
+  if (error) return { error: error.code === "42501" ? "Sem permissão." : error.message };
+
+  revalidatePath("/funcionarios");
+  return { ok: true };
+}
+
 export async function toggleEmployeeActive(employeeId: string, active: boolean) {
   const { supabase, employee } = await requireAdminAction();
   if (employeeId === employee.id && !active) throw new Error("Você não pode desativar a si mesmo");

@@ -1159,6 +1159,13 @@ begin
     update public.items set supplier_id = p_supplier_id, updated_at = now() where id = v_item.id;
   end if;
 
+  -- Lembra o custo da última compra: a próxima entrada deste produto já vem com o valor
+  -- pré-preenchido (dá pra corrigir se o preço mudou). Só em compra — devolução/transferência
+  -- não é um preço novo de verdade.
+  if p_type = 'entrada' and p_subtype = 'compra' and p_unit_value is not null and p_unit_value is distinct from v_item.cost_price then
+    update public.items set cost_price = p_unit_value, updated_at = now() where id = v_item.id;
+  end if;
+
   return jsonb_build_object('movement_id', v_movement_id, 'quantity', v_quantity);
 end;
 $$;

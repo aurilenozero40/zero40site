@@ -27,7 +27,8 @@ export class NotificationService {
 
   async processPending(limit = 10): Promise<ProcessSummary> {
     const registered = Object.values(this.channels);
-    if (registered.length === 0 || registered.some((c) => !c.isConfigured())) {
+    const configured = await Promise.all(registered.map((c) => c.isConfigured()));
+    if (registered.length === 0 || configured.some((ok) => !ok)) {
       return { claimed: 0, sent: 0, retrying: 0, failed: 0, notConfigured: true };
     }
 

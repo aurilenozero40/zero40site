@@ -181,27 +181,38 @@ describe("canal Telegram", () => {
   const ok = () => new Response(JSON.stringify({ ok: true }), { status: 200 });
   const err = (status: number, description: string) => new Response(JSON.stringify({ ok: false, description }), { status });
 
-  it("envia para o chat do CEO com o token vindo da configuração", async () => {
+  const recipients = (...ids: string[]) => () => Promise.resolve(ids);
+
+  it("envia para todos os destinatários cadastrados com o token vindo da configuração", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(ok());
-    const tg = new TelegramChannel({ token: "123:ABC", chatId: "999", fetchImpl });
+    const tg = new TelegramChannel({ token: "123:ABC", getRecipients: recipients("999", "111"), fetchImpl });
     await tg.send(msg);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe("https://api.telegram.org/bot123:ABC/sendMessage");
     expect(JSON.parse(init.body)).toEqual({ chat_id: "999", text: "<b>oi</b>", parse_mode: "HTML", disable_web_page_preview: true });
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).toMatchObject({ chat_id: "111" });
   });
 
-  it("sem token ou sem chat ID: não está configurado e envio falha como repetível", async () => {
-    expect(new TelegramChannel({ token: "x" }).isConfigured()).toBe(false);
-    expect(new TelegramChannel({ chatId: "1" }).isConfigured()).toBe(false);
-    expect(new TelegramChannel({ token: "  ", chatId: "1" }).isConfigured()).toBe(false);
-    expect(TelegramChannel.fromEnv({ TELEGRAM_BOT_TOKEN: "t", TELEGRAM_CEO_CHAT_ID: "1" }).isConfigured()).toBe(true);
+  it("sem token ou sem destinatários: não está configurado e envio falha como repetível", async () => {
+    expect(await new TelegramChannel({ token: "x" }).isConfigured()).toBe(false);
+    expect(await new TelegramChannel({ getRecipients: recipients("1") }).isConfigured()).toBe(false);
+    expect(await new TelegramChannel({ token: "  ", getRecipients: recipients("1") }).isConfigured()).toBe(false);
+    expect(await TelegramChannel.fromEnv({ TELEGRAM_BOT_TOKEN: "t" }).isConfigured()).toBe(false);
+    expect(await new TelegramChannel({ token: "t", getRecipients: recipients("1") }).isConfigured()).toBe(true);
     await expect(new TelegramChannel({}).send(msg)).rejects.toMatchObject({ retryable: true });
+  });
+
+  it("alguns destinatários falham mas pelo menos um recebe: considera entregue", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(err(403, "bot blocked")).mockResolvedValueOnce(ok());
+    await new TelegramChannel({ token: "123:ABC", getRecipients: recipients("1", "2"), fetchImpl }).send(msg);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("classifica erros: 429/5xx/rede são repetíveis; 400/401/403 (chat errado, bot bloqueado) não", async () => {
     const run = (r: Response | Error) => {
       const fetchImpl = vi.fn()[r instanceof Error ? "mockRejectedValue" : "mockResolvedValue"](r);
-      return new TelegramChannel({ token: "123:ABC", chatId: "1", fetchImpl }).send(msg).catch((e) => e as NotificationError);
+      return new TelegramChannel({ token: "123:ABC", getRecipients: recipients("1"), fetchImpl }).send(msg).catch((e) => e as NotificationError);
     };
     expect(await run(err(429, "Too Many Requests"))).toMatchObject({ retryable: true });
     expect(await run(err(502, "Bad Gateway"))).toMatchObject({ retryable: true });
@@ -213,7 +224,7 @@ describe("canal Telegram", () => {
 
   it("o token nunca aparece em mensagem de erro", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND api.telegram.org/bot123:SECRET/sendMessage"));
-    const e = (await new TelegramChannel({ token: "123:SECRET", chatId: "1", fetchImpl }).send(msg).catch((x) => x)) as Error;
+    const e = (await new TelegramChannel({ token: "123:SECRET", getRecipients: recipients("1"), fetchImpl }).send(msg).catch((x) => x)) as Error;
     expect(e.message).not.toContain("123:SECRET");
     expect(e.message).toContain("***");
   });
@@ -234,7 +245,7 @@ describe("serviço de notificações (fila → canal)", () => {
       markSent: vi.fn(async (id) => void calls.sent.push(id)),
       markFailed: vi.fn(async (id, error, retryable) => void calls.failed.push({ id, error, retryable })),
     };
-    const ch: NotificationChannel = { name: "telegram", isConfigured: () => true, send: vi.fn().mockResolvedValue(undefined), ...channel };
+    const ch: NotificationChannel = { name: "telegram", isConfigured: async () => true, send: vi.fn().mockResolvedValue(undefined), ...channel };
     const service = new NotificationService(store, { telegram: ch }, { error: () => {} });
     return { service, store, ch, calls };
   }
@@ -266,7 +277,7 @@ describe("serviço de notificações (fila → canal)", () => {
   });
 
   it("canal sem configuração: não reivindica nada, fila fica pendente e sem gastar tentativa", async () => {
-    const { service, store } = setup([row()], { isConfigured: () => false });
+    const { service, store } = setup([row()], { isConfigured: async () => false });
     const r = await service.processPending();
     expect(r).toMatchObject({ claimed: 0, notConfigured: true });
     expect(store.claim).not.toHaveBeenCalled();

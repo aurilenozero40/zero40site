@@ -77,7 +77,6 @@ Ver [.env.local.example](.env.local.example). Na Vercel: Project → Settings �
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | conexão do navegador/servidor com o Supabase |
 | `SUPABASE_SERVICE_ROLE_KEY` | **só servidor**: entrega de notificações e criação de funcionário. Nunca no navegador |
 | `TELEGRAM_BOT_TOKEN` | token do bot (@BotFather) |
-| `TELEGRAM_CEO_CHAT_ID` | chat que recebe os avisos |
 | `TELEGRAM_WEBHOOK_SECRET` | valida o webhook do `/start` |
 | `CRON_SECRET` | protege o reenvio automático (`/api/notifications/process`) |
 
@@ -90,8 +89,13 @@ Ver [.env.local.example](.env.local.example). Na Vercel: Project → Settings �
      -d "url=https://<seu-dominio>/api/telegram/webhook" \
      -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
    ```
-3. Mande `/start` ao bot: ele responde o **chat ID**. Coloque em `TELEGRAM_CEO_CHAT_ID` e faça o redeploy.
-4. Em **Configurações**, clique em *Enviar mensagem de teste* e escolha quais eventos o CEO recebe.
+3. Cada dono/gerente/admin que deve receber avisos manda `/start` ao bot: ele responde o **chat ID** da
+   pessoa. Um administrador cola esse número em **Funcionários**, no campo "Telegram" da pessoa
+   (`employees.telegram_chat_id`) — sem redeploy, é só um cadastro.
+4. Em **Configurações**, clique em *Enviar mensagem de teste* e escolha quais eventos disparam aviso.
+
+Avisos vão para **todos** os funcionários ativos com papel dono/admin/gerente que tiverem chat ID cadastrado —
+não é mais um único destinatário fixo.
 
 Eventos: venda realizada, venda cancelada, devolução, estoque baixo, produto esgotado, entrada de estoque.
 Alerta de estoque dispara **uma vez** quando o produto vira (fica baixo/zera) — não repete a cada venda.

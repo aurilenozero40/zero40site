@@ -1,8 +1,9 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { X } from "lucide-react";
+import { CheckCircle2, X } from "lucide-react";
 import { isValidGtin } from "@/lib/barcode";
+import { ITEM_CATEGORIES } from "@/lib/categories";
 import type { Item, Supplier } from "@/lib/types";
 import type { ActionState } from "@/app/(app)/itens/actions";
 
@@ -19,10 +20,41 @@ export function ItemForm({
   suppliers: Supplier[];
 }) {
   const [state, formAction, pending] = useActionState<ActionState, FormData>(action, null);
+
+  // Cadastro (não edição): depois de salvar, o formulário inteiro remonta limpo (key muda a
+  // cada sucesso), pronto pro próximo produto — sem trocar de tela e sem repetir campos antigos.
+  const formKey = item ? item.id : (state?.resetToken ?? "new");
+
+  return (
+    <ItemFormBody
+      key={formKey}
+      action={formAction}
+      state={state}
+      pending={pending}
+      item={item}
+      suppliers={suppliers}
+    />
+  );
+}
+
+function ItemFormBody({
+  action,
+  state,
+  pending,
+  item,
+  suppliers,
+}: {
+  action: (formData: FormData) => void;
+  state: ActionState;
+  pending: boolean;
+  item?: Item;
+  suppliers: Supplier[];
+}) {
   const [barcode, setBarcode] = useState(item?.barcode ?? "");
   const [trackSerial, setTrackSerial] = useState(item?.track_serial ?? false);
   const [initialSerials, setInitialSerials] = useState<string[]>([]);
   const [serialInput, setSerialInput] = useState("");
+  const [category, setCategory] = useState(item?.category ?? "");
 
   // Só avisa (não bloqueia): códigos internos/alfanuméricos são válidos, mas um
   // código numérico de 8/12/13/14 dígitos com verificador errado é quase
@@ -35,7 +67,7 @@ export function ItemForm({
 
   return (
     <form
-      action={formAction}
+      action={action}
       // O leitor de código de barras "digita" o código e manda Enter — sem isso, o Enter
       // enviava o formulário na hora (produto salvo pela metade, faltando os outros campos).
       onKeyDown={(e) => {
@@ -46,12 +78,25 @@ export function ItemForm({
       }}
       className="flex flex-col gap-6"
     >
+      {!item && state?.ok && (
+        <div className="flex flex-col gap-1.5">
+          <p role="status" className="flex items-center gap-1.5 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm font-medium text-success">
+            <CheckCircle2 size={15} /> {state.ok} cadastrado! Pronto para o próximo.
+          </p>
+          {state.warning && (
+            <p role="alert" className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+              {state.warning}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="card grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
           <label className="label" htmlFor="name">
             Nome *
           </label>
-          <input id="name" name="name" required className="input" defaultValue={item?.name} />
+          <input id="name" name="name" autoFocus={!item} required className="input" defaultValue={item?.name} />
         </div>
 
         <div>
@@ -86,12 +131,18 @@ export function ItemForm({
           <label className="label" htmlFor="category">
             Categoria
           </label>
-          <input
-            id="category"
-            name="category"
-            className="input"
-            defaultValue={item?.category ?? ""}
-          />
+          <select id="category" name="category" className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="">-</option>
+            {ITEM_CATEGORIES.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+            {/* categoria antiga que já existia no cadastro mas não está mais na lista oficial — preserva o valor em vez de apagar */}
+            {category && !ITEM_CATEGORIES.includes(category as (typeof ITEM_CATEGORIES)[number]) && (
+              <option value={category}>{category}</option>
+            )}
+          </select>
         </div>
 
         <div>

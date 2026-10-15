@@ -50,6 +50,9 @@ const parseNumber = (text: string) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/** Preenche o valor unitário com o último custo conhecido do produto — o usuário ainda pode corrigir. */
+const defaultUnitValueText = (item: Item) => (item.cost_price != null ? item.cost_price.toFixed(2).replace(".", ",") : "");
+
 /**
  * Entrada de estoque: uma NOTA com vários produtos de uma vez. Bipar o mesmo item do mesmo
  * fornecedor de novo só soma na mesma linha (grupo, por quantidade); item diferente, ou o
@@ -114,7 +117,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
       }
       return [
         ...prev,
-        { itemId: item.id, name: item.name, unit: item.unit, trackSerial: false, supplierId, supplierName, qtyText: "1", serials: [], unitValueText: "" },
+        { itemId: item.id, name: item.name, unit: item.unit, trackSerial: false, supplierId, supplierName, qtyText: "1", serials: [], unitValueText: defaultUnitValueText(item) },
       ];
     });
     setNotice({ kind: "ok", text: `${item.name} adicionado.` });
@@ -227,7 +230,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
           supplierName: pendingSerial.supplierName,
           qtyText: "",
           serials: [s],
-          unitValueText: "",
+          unitValueText: defaultUnitValueText(pendingSerial.item),
         },
       ];
     });

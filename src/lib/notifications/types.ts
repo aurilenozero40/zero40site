@@ -60,8 +60,8 @@ export class NotificationError extends Error {
 
 export interface NotificationChannel {
   readonly name: string;
-  /** Tem credenciais/destino? Sem isso a fila fica parada (pendente), sem gastar tentativas. */
-  isConfigured(): boolean;
+  /** Tem credenciais/destinatário? Sem isso a fila fica parada (pendente), sem gastar tentativas. */
+  isConfigured(): Promise<boolean>;
   send(message: RenderedMessage): Promise<void>;
 }
 

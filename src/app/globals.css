@@ -95,3 +95,17 @@ body {
     @apply inline-flex items-center gap-1 rounded-full bg-danger/10 px-2 py-0.5 text-xs font-semibold text-danger;
   }
 }
+
+/* Recibo de venda: imprime numa bobina térmica estreita (80mm), não em folha A4.
+   "page: receipt" fica só no #recibo-content, então isso não afeta impressão de
+   mais nada no sistema — só essa página define esse nome de página. */
+@media print {
+  @page receipt {
+    size: 80mm auto;
+    margin: 3mm;
+  }
+
+  #recibo-content {
+    page: receipt;
+  }
+}

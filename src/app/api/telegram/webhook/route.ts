@@ -4,8 +4,8 @@ import { TelegramChannel } from "@/lib/notifications/telegram";
 
 /**
  * O Telegram é SÓ camada de notificações: vendas e movimentações nascem na plataforma
- * (com validação, estoque, auditoria e aviso ao CEO). Este webhook existe apenas para o
- * dono descobrir o chat ID que vai em TELEGRAM_CEO_CHAT_ID.
+ * (com validação, estoque, auditoria e avisos). Este webhook existe apenas para cada
+ * dono/gerente/admin descobrir seu chat ID e um administrador colar em Funcionários.
  */
 
 type TelegramUpdate = {
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
 
   const reply =
     command === "start"
-      ? `Este bot envia os avisos da loja (vendas, cancelamentos, estoque baixo).\n\nO ID deste chat é: ${chatId}\n\nPara receber os avisos aqui, o administrador coloca esse número em TELEGRAM_CEO_CHAT_ID.`
+      ? `Este bot envia os avisos da loja (vendas, cancelamentos, estoque baixo).\n\nO ID deste chat é: ${chatId}\n\nPara receber os avisos aqui, peça para um administrador colar esse número no seu cadastro em Funcionários (campo "Telegram").`
       : "Este bot só envia notificações. Para registrar vendas e movimentações de estoque, use a plataforma.";
 
   try {
