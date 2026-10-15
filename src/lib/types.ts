@@ -145,6 +145,7 @@ export type Sale = {
   idempotency_key: string;
   status: SaleStatus;
   seller_id: string;
+  created_by: string;
   customer_id: string | null;
   subtotal: number;
   discount_amount: number;

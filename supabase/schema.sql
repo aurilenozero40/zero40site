@@ -414,7 +414,8 @@ create table if not exists public.sales (
   idempotency_key uuid not null unique,
   status          text not null default 'concluida'
                   check (status in ('pendente','concluida','cancelada','devolvida','parcialmente_devolvida')),
-  seller_id       uuid not null references public.employees(id),
+  seller_id       uuid not null references public.employees(id),  -- a quem a venda é atribuída (relatórios/comissão)
+  created_by      uuid not null references public.employees(id) default auth.uid(),  -- quem de fato registrou (pode ser diferente do vendedor)
   customer_id     uuid references public.customers(id),
   subtotal        numeric(12,2) not null check (subtotal >= 0),
   discount_amount numeric(12,2) not null default 0 check (discount_amount >= 0),
@@ -441,6 +442,15 @@ create index if not exists idx_sales_status   on public.sales (status, created_a
 -- ---- 5.1b compatibilidade: colunas de entrada (troca) que bancos antigos não têm --------------
 alter table public.sales add column if not exists trade_in_amount numeric(12,2) not null default 0;
 alter table public.sales add column if not exists trade_in_item_id uuid references public.items(id);
+
+-- ---- 5.1c compatibilidade: created_by (quem registrou) separado de seller_id (a quem é atribuída) ----
+-- Antes, uma venda só podia ser atribuída a quem estivesse logado. Agora dono/gerente pode
+-- registrar a venda em nome de outro vendedor; created_by guarda quem de fato processou,
+-- pra auditoria e pra idempotência não confundir uma pessoa com a outra.
+alter table public.sales add column if not exists created_by uuid references public.employees(id);
+update public.sales set created_by = seller_id where created_by is null;
+alter table public.sales alter column created_by set default auth.uid();
+alter table public.sales alter column created_by set not null;
 
 -- total passa a descontar também o valor de entrada (troca) — recria a constraint com a fórmula nova.
 do $$
@@ -845,7 +855,8 @@ begin
     raise exception 'Vendas não podem ser apagadas.' using errcode = 'P0001', hint = 'IMMUTABLE';
   end if;
   if new.id <> old.id or new.number <> old.number or new.idempotency_key <> old.idempotency_key
-     or new.seller_id <> old.seller_id or new.customer_id is distinct from old.customer_id
+     or new.seller_id <> old.seller_id or new.created_by <> old.created_by
+     or new.customer_id is distinct from old.customer_id
      or new.subtotal <> old.subtotal or new.discount_amount <> old.discount_amount
      or new.interest_amount <> old.interest_amount or new.total <> old.total
      or new.created_at <> old.created_at or new.notes is distinct from old.notes then
@@ -1233,6 +1244,7 @@ $$;
 -- Assinatura mudou (ganhou p_trade_in): descarta a versão antiga pra não sobrepor (Postgres trata
 -- listas de parâmetros diferentes como funções distintas, não como substituição).
 drop function if exists public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text);
+drop function if exists public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text, jsonb);
 
 create or replace function public.create_sale(
   p_idempotency_key uuid,
@@ -1244,7 +1256,8 @@ create or replace function public.create_sale(
   p_interest_percent numeric default 0,-- juros cobrado do cliente (só credito_parcelado)
   p_card_brand text default null,
   p_notes text default null,
-  p_trade_in jsonb default null        -- { "item_name": text, "category": text|null, "value": n } | null
+  p_trade_in jsonb default null,       -- { "item_name": text, "category": text|null, "value": n } | null
+  p_seller_id uuid default null        -- registrar em nome de outro vendedor (só gerente+); null = o próprio
 )
 returns jsonb
 language plpgsql
@@ -1254,6 +1267,8 @@ as $$
 declare
   v_uid uuid := auth.uid();
   v_emp public.employees%rowtype;
+  v_seller_id uuid;
+  v_seller_name text;
   v_existing public.sales%rowtype;
   v_customer_name text;
   v_elem jsonb;
@@ -1295,6 +1310,24 @@ begin
   if not found then
     raise exception 'Seu usuário não tem permissão para vender.' using errcode = 'P0001', hint = 'FORBIDDEN';
   end if;
+
+  -- Registrar em nome de outro vendedor (ex.: dono vendeu no balcão mas quer atribuir a venda a
+  -- quem realmente atendeu): só gerente+ pode; quem processou (created_by) continua sendo v_uid.
+  if p_seller_id is not null and p_seller_id <> v_uid then
+    if not public.is_manager() then
+      raise exception 'Apenas gerente, administrador ou CEO podem registrar venda em nome de outro vendedor.'
+        using errcode = 'P0001', hint = 'FORBIDDEN';
+    end if;
+    select full_name into v_seller_name from public.employees where id = p_seller_id and active;
+    if not found then
+      raise exception 'Vendedor selecionado não encontrado ou inativo.' using errcode = 'P0001', hint = 'SELLER_NOT_FOUND';
+    end if;
+    v_seller_id := p_seller_id;
+  else
+    v_seller_id := v_uid;
+    v_seller_name := v_emp.full_name;
+  end if;
+
   if p_idempotency_key is null then
     raise exception 'Chave de idempotência obrigatória.' using errcode = 'P0001', hint = 'IDEMPOTENCY_KEY_REQUIRED';
   end if;
@@ -1303,7 +1336,7 @@ begin
   perform pg_advisory_xact_lock(hashtextextended('create_sale:' || p_idempotency_key::text, 0));
   select * into v_existing from public.sales where idempotency_key = p_idempotency_key;
   if found then
-    if v_existing.seller_id <> v_uid then
+    if v_existing.created_by <> v_uid then
       raise exception 'Chave de idempotência já usada por outra venda.' using errcode = 'P0001', hint = 'IDEMPOTENCY_CONFLICT';
     end if;
     return jsonb_build_object('sale_id', v_existing.id, 'number', v_existing.number,
@@ -1486,9 +1519,9 @@ begin
   end if;
 
   -- Grava
-  insert into public.sales (idempotency_key, seller_id, customer_id, subtotal, discount_amount,
+  insert into public.sales (idempotency_key, seller_id, created_by, customer_id, subtotal, discount_amount,
                             interest_amount, trade_in_amount, total, notes)
-  values (p_idempotency_key, v_uid, p_customer_id, v_subtotal, v_discount, v_interest, v_ti_value, v_total,
+  values (p_idempotency_key, v_seller_id, v_uid, p_customer_id, v_subtotal, v_discount, v_interest, v_ti_value, v_total,
           nullif(btrim(p_notes), ''))
   returning id, number into v_sale_id, v_number;
 
@@ -1550,7 +1583,7 @@ begin
     'SALE_COMPLETED:' || v_sale_id,
     jsonb_build_object(
       'sale_id', v_sale_id, 'code', public.sale_code(v_number),
-      'seller', v_emp.full_name, 'customer', v_customer_name,
+      'seller', v_seller_name, 'customer', v_customer_name,
       'items', v_lines, 'stock', v_stock,
       'subtotal', v_subtotal, 'discount', v_discount, 'interest', v_interest,
       'trade_in', case when v_ti_value > 0 then jsonb_build_object('name', v_ti_name, 'value', v_ti_value) else null end,
@@ -2003,10 +2036,10 @@ revoke execute on function public.create_movement(text, uuid, numeric, text, num
 grant  execute on function public.create_movement(text, uuid, numeric, text, numeric, text, boolean, jsonb, uuid) to authenticated;
 revoke execute on function public.create_stock_entry(jsonb, text, text) from public, anon;
 grant  execute on function public.create_stock_entry(jsonb, text, text) to authenticated;
-revoke execute on function public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text, jsonb) from public, anon;
+revoke execute on function public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text, jsonb, uuid) from public, anon;
 revoke execute on function public.cancel_sale(uuid, text)                          from public, anon;
 revoke execute on function public.return_sale_items(uuid, jsonb, text, uuid)       from public, anon;
-grant  execute on function public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text, jsonb) to authenticated;
+grant  execute on function public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text, jsonb, uuid) to authenticated;
 grant  execute on function public.cancel_sale(uuid, text)                          to authenticated;
 grant  execute on function public.return_sale_items(uuid, jsonb, text, uuid)       to authenticated;
 grant  execute on function public.sales_revenue(timestamptz, timestamptz)          to authenticated;

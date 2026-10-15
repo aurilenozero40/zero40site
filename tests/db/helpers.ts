@@ -173,6 +173,7 @@ export interface SaleArgs {
   brand?: string | null;
   notes?: string | null;
   tradeIn?: { item_name: string; category?: string | null; value: number } | null;
+  sellerId?: string | null;
 }
 
 export interface SaleResult {
@@ -185,7 +186,7 @@ export interface SaleResult {
 }
 
 export async function callCreateSale(c: pg.Client, a: SaleArgs): Promise<SaleResult> {
-  const r = await c.query("select public.create_sale($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10::jsonb) as r", [
+  const r = await c.query("select public.create_sale($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10::jsonb,$11) as r", [
     a.key ?? crypto.randomUUID(),
     a.customer ?? null,
     JSON.stringify(a.items),
@@ -196,6 +197,7 @@ export async function callCreateSale(c: pg.Client, a: SaleArgs): Promise<SaleRes
     a.brand ?? null,
     a.notes ?? null,
     a.tradeIn ? JSON.stringify(a.tradeIn) : null,
+    a.sellerId ?? null,
   ]);
   return r.rows[0].r as SaleResult;
 }

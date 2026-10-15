@@ -146,7 +146,8 @@ export async function createSaleAction(input: unknown): Promise<ActionResult<Sal
   if (!parsed.success) return { ok: false, error: firstIssue(parsed.error.issues) };
   const s = parsed.data;
 
-  // O vendedor NÃO vai no payload: o banco usa o usuário autenticado da sessão.
+  // Normalmente o vendedor é quem está logado; p_seller_id só é diferente quando gerente+
+  // registra a venda em nome de outro vendedor (o banco confere a permissão de novo).
   const { data, error } = await supabase.rpc("create_sale", {
     p_idempotency_key: s.idempotencyKey,
     p_customer_id: s.customerId ?? null,
@@ -158,6 +159,7 @@ export async function createSaleAction(input: unknown): Promise<ActionResult<Sal
     p_card_brand: s.cardBrand ?? null,
     p_notes: s.notes ?? null,
     p_trade_in: s.tradeIn ? { item_name: s.tradeIn.itemName, category: s.tradeIn.category ?? null, value: s.tradeIn.value } : null,
+    p_seller_id: s.sellerId ?? null,
   });
   if (error) return { ok: false, error: friendlyRpcError(error) };
 

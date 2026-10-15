@@ -125,6 +125,7 @@ export type CustomerInput = z.input<typeof customerSchema>;
 export const saleInputSchema = z.object({
   idempotencyKey: z.string().uuid("Chave da venda inválida"),
   customerId: z.string().uuid().nullable().optional(),
+  sellerId: z.string().uuid().nullable().optional(),
   items: z
     .array(
       z.object({

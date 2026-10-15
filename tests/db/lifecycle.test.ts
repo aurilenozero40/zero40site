@@ -364,8 +364,8 @@ describe("dashboard (sales_dashboard / sales_revenue)", () => {
     const d1 = await createTestDb("upgrade");
     // 2026-09-19 01:30 UTC = 2026-09-18 22:30 em Brasília
     await d1.q(
-      `insert into sales (idempotency_key, seller_id, subtotal, total, created_at)
-       values (gen_random_uuid(), $1, 100, 100, '2026-09-19T01:30:00Z'), (gen_random_uuid(), $1, 50, 50, '2026-09-19T15:00:00Z')`,
+      `insert into sales (idempotency_key, seller_id, created_by, subtotal, total, created_at)
+       values (gen_random_uuid(), $1, $1, 100, 100, '2026-09-19T01:30:00Z'), (gen_random_uuid(), $1, $1, 50, 50, '2026-09-19T15:00:00Z')`,
       [ids.seller]
     );
     const r = await d1.asUser(ids.ceo, async (c) => (await c.query("select public.sales_dashboard('2026-09-01Z','2026-10-01Z') r")).rows[0].r);

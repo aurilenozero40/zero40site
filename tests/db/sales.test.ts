@@ -323,3 +323,41 @@ describe("create_sale — quem pode vender", () => {
     await db.q("update employees set active = true where id = $1", [ids.seller2]);
   });
 });
+
+describe("create_sale — registrar em nome de outro vendedor", () => {
+  it("gerente registra a venda atribuída a outro vendedor; seller_id vira o vendedor, created_by continua o gerente", async () => {
+    const item = await addItem(db, { name: "Garmin atribuída", price: 100, stock: 5 });
+    const r = await sell(db, ids.manager, { items: [{ item_id: item, quantity: 1 }], sellerId: ids.seller2 });
+    const sale = await db.one<{ seller_id: string; created_by: string }>("select seller_id, created_by from sales where id = $1", [r.sale_id]);
+    expect(sale.seller_id).toBe(ids.seller2);
+    expect(sale.created_by).toBe(ids.manager);
+  });
+
+  it("vendedor não pode registrar venda em nome de outro vendedor", async () => {
+    const item = await addItem(db, { name: "Tentativa indevida", price: 100, stock: 5 });
+    expect(await hintOf(sell(db, ids.seller, { items: [{ item_id: item, quantity: 1 }], sellerId: ids.seller2 }))).toBe("FORBIDDEN");
+  });
+
+  it("recusa vendedor de destino inexistente ou inativo", async () => {
+    const item = await addItem(db, { name: "Destino inválido", price: 100, stock: 5 });
+    expect(
+      await hintOf(sell(db, ids.manager, { items: [{ item_id: item, quantity: 1 }], sellerId: "00000000-0000-0000-0000-000000000000" }))
+    ).toBe("SELLER_NOT_FOUND");
+
+    await db.q("update employees set active = false where id = $1", [ids.seller2]);
+    expect(await hintOf(sell(db, ids.manager, { items: [{ item_id: item, quantity: 1 }], sellerId: ids.seller2 }))).toBe("SELLER_NOT_FOUND");
+    await db.q("update employees set active = true where id = $1", [ids.seller2]);
+  });
+
+  it("idempotência de venda atribuída segue quem registrou (created_by), não o vendedor atribuído", async () => {
+    const item = await addItem(db, { name: "Idempotência atribuída", price: 100, stock: 5 });
+    const key = crypto.randomUUID();
+    const first = await sell(db, ids.manager, { key, items: [{ item_id: item, quantity: 1 }], sellerId: ids.seller2 });
+    // o mesmo gerente repetindo a mesma chave é idempotente (não duplica)
+    const again = await sell(db, ids.manager, { key, items: [{ item_id: item, quantity: 1 }], sellerId: ids.seller2 });
+    expect(again.already_processed).toBe(true);
+    expect(again.sale_id).toBe(first.sale_id);
+    // o vendedor atribuído (dono da sessão diferente) não pode reusar a chave do gerente
+    expect(await hintOf(sell(db, ids.seller2, { key, items: [{ item_id: item, quantity: 1 }] }))).toBe("IDEMPOTENCY_CONFLICT");
+  });
+});

@@ -9,11 +9,17 @@ export const dynamic = "force-dynamic";
 export default async function NovaVendaPage() {
   const { supabase, employee } = await requireEmployee();
 
-  const [{ data: limits, error: limitsError }, { data: rateRows, error: ratesError }, { data: kitsData }] = await Promise.all([
-    supabase.rpc("sale_limits"),
-    supabase.from("card_fee_rates").select("brand, installments, fee_percent"),
-    supabase.from("kits").select("*").eq("active", true).order("name"),
-  ]);
+  const manager = isManager(employee.role);
+  const [{ data: limits, error: limitsError }, { data: rateRows, error: ratesError }, { data: kitsData }, { data: sellerRows }] =
+    await Promise.all([
+      supabase.rpc("sale_limits"),
+      supabase.from("card_fee_rates").select("brand, installments, fee_percent"),
+      supabase.from("kits").select("*").eq("active", true).order("name"),
+      // só pra montar o seletor "registrar em nome de outro vendedor" (gerente+)
+      manager
+        ? supabase.from("employees").select("id, full_name").eq("active", true).order("full_name")
+        : Promise.resolve({ data: [] as { id: string; full_name: string }[] }),
+    ]);
 
   // Banco ainda sem o schema novo (funções de venda não existem): avisa em vez de quebrar.
   if (limitsError) {
@@ -62,8 +68,9 @@ export default async function NovaVendaPage() {
         feeRates={ratesFromRows((rateRows ?? []) as { brand: string; installments: number; fee_percent: number }[])}
         discountLimitPercent={Number(lim.discount_limit_percent)}
         maxInterestPercent={Number(lim.max_interest_percent)}
-        canSeeFees={isManager(employee.role)}
+        canSeeFees={manager}
         kits={kits}
+        sellers={manager ? ((sellerRows ?? []) as { id: string; full_name: string }[]).filter((s) => s.id !== employee.id) : undefined}
       />
     </div>
   );

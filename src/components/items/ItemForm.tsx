@@ -68,13 +68,19 @@ function ItemFormBody({
   return (
     <form
       action={action}
-      // O leitor de código de barras "digita" o código e manda Enter — sem isso, o Enter
-      // enviava o formulário na hora (produto salvo pela metade, faltando os outros campos).
+      // Enter se comporta como Tab: vai pro próximo campo em vez de enviar o formulário —
+      // também evita que o leitor de código de barras (que "digita" e manda Enter) envie a
+      // nota pela metade.
       onKeyDown={(e) => {
-        const tag = (e.target as HTMLElement).tagName;
-        if (e.key === "Enter" && (tag === "INPUT" || tag === "SELECT")) {
-          e.preventDefault();
-        }
+        const target = e.target as HTMLElement;
+        if (e.key !== "Enter" || !["INPUT", "SELECT"].includes(target.tagName)) return;
+        e.preventDefault();
+        const form = e.currentTarget;
+        const focusable = Array.from(form.querySelectorAll<HTMLElement>('input, select, textarea, button[type="submit"]')).filter(
+          (el) => !el.hasAttribute("disabled") && el.offsetParent !== null
+        );
+        const next = focusable[focusable.indexOf(target) + 1];
+        next?.focus();
       }}
       className="flex flex-col gap-6"
     >

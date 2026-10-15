@@ -25,7 +25,7 @@ export function ItemsTable({
   /** classe ABC (curva de Pareto do faturamento) — A = carro-chefe, C = cauda longa. */
   abcClass?: Map<string, "A" | "B" | "C">;
 }) {
-  const colCount = 7 + (showCost ? 1 : 0) + (salesShare ? 1 : 0);
+  const colCount = 7 + (showCost ? 2 : 0) + (salesShare ? 1 : 0);
   return (
     <div className="card overflow-x-auto p-0">
       <table className="w-full text-sm">
@@ -36,6 +36,7 @@ export function ItemsTable({
             <th className="px-4 py-3">Cód. barras</th>
             <th className="px-4 py-3 text-right">Preço</th>
             {showCost && <th className="px-4 py-3 text-right">Custo</th>}
+            {showCost && <th className="px-4 py-3 text-right">Margem</th>}
             <th className="px-4 py-3 text-right">Estoque</th>
             <th className="px-4 py-3 text-right">Mínimo</th>
             {salesShare && <th className="px-4 py-3 text-right">% vendas</th>}
@@ -46,6 +47,10 @@ export function ItemsTable({
           {items.map((item) => {
             const low = isLowStock(item);
             const share = salesShare?.get(item.id) ?? 0;
+            const margin =
+              item.sale_price !== null && item.sale_price > 0 && item.cost_price !== null
+                ? ((item.sale_price - item.cost_price) / item.sale_price) * 100
+                : null;
             return (
               <tr key={item.id} className="border-b border-border transition-colors last:border-0 hover:bg-foreground/[0.04]">
                 <td className="px-4 py-3 font-medium text-foreground">
@@ -75,6 +80,11 @@ export function ItemsTable({
                 <td className="px-4 py-3 font-mono text-xs text-muted">{item.barcode ?? "-"}</td>
                 <td className="px-4 py-3 text-right tabular-nums">{item.sale_price === null ? <span className="text-muted">—</span> : formatCurrency(item.sale_price)}</td>
                 {showCost && <td className="px-4 py-3 text-right tabular-nums text-muted">{item.cost_price === null ? "—" : formatCurrency(item.cost_price)}</td>}
+                {showCost && (
+                  <td className={`px-4 py-3 text-right tabular-nums ${margin === null ? "text-muted" : margin <= 0 ? "text-danger" : "text-success"}`}>
+                    {margin === null ? "—" : `${margin.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`}
+                  </td>
+                )}
                 <td className={`px-4 py-3 text-right tabular-nums ${item.quantity <= 0 ? "text-danger" : ""}`}>{formatQuantity(item.quantity, item.unit)}</td>
                 <td className="px-4 py-3 text-right tabular-nums text-muted">{formatQuantity(item.min_stock, item.unit)}</td>
                 {salesShare && (

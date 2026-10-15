@@ -90,18 +90,27 @@ interface KitOption {
   components: KitComponent[];
 }
 
+interface SellerOption {
+  id: string;
+  full_name: string;
+}
+
 export function PosScreen({
   feeRates,
   discountLimitPercent,
   maxInterestPercent,
   canSeeFees,
   kits,
+  sellers,
 }: {
   feeRates: CardFeeRates;
   discountLimitPercent: number;
   maxInterestPercent: number;
   canSeeFees: boolean;
   kits?: KitOption[];
+  /** Outros vendedores ativos (exceto quem está logado) — só vem preenchido pra gerente+.
+   *  Permite registrar a venda em nome de outra pessoa (ex: dono atendeu, mas quem vendeu foi X). */
+  sellers?: SellerOption[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -124,6 +133,7 @@ export function PosScreen({
 
   // ---- venda -----------------------------------------------------------------------------------
   const [customer, setCustomer] = useState<CustomerHit | null>(null);
+  const [sellerId, setSellerId] = useState("");
   const [method, setMethod] = useState<PaymentMethod>("pix");
   const [brand, setBrand] = useState("");
   const [installments, setInstallments] = useState(2);
@@ -184,6 +194,7 @@ export function PosScreen({
   // ---- chave de idempotência: muda sempre que o conteúdo da venda muda ----------------------------
   const payload = {
     customerId: customer?.id ?? null,
+    sellerId: sellerId || null,
     items: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity, serials: l.trackSerial ? l.serials : undefined })),
     discountAmount: discountCents / 100,
     paymentMethod: method,
@@ -675,6 +686,21 @@ export function PosScreen({
           <CustomerPicker value={customer} onChange={setCustomer} />
         </div>
 
+        {sellers && sellers.length > 0 && (
+          <div className="card flex flex-col gap-2">
+            <h2 className="text-sm font-semibold text-foreground">Vendedor</h2>
+            <select id="pos_seller" className="input" value={sellerId} onChange={(e) => setSellerId(e.target.value)}>
+              <option value="">Eu mesmo</option>
+              {sellers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.full_name}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted">Atendeu outra pessoa? Escolha aqui pra venda ficar atribuída a quem vendeu de verdade.</p>
+          </div>
+        )}
+
         <div className="card flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-foreground">Pagamento</h2>
           <div className="grid grid-cols-2 gap-2">
@@ -889,6 +915,12 @@ export function PosScreen({
           </ul>
 
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
+            {sellerId && (
+              <>
+                <dt className="text-muted">Vendedor</dt>
+                <dd className="text-right">{sellers?.find((s) => s.id === sellerId)?.full_name ?? "—"}</dd>
+              </>
+            )}
             <dt className="text-muted">Cliente</dt>
             <dd className="text-right">{customer ? customer.name : "Não informado"}</dd>
             <dt className="text-muted">Pagamento</dt>
