@@ -15,7 +15,7 @@ export default async function NovaMovimentacaoPage({
   const { supabase } = await requireManager();
   const [{ data: items, error }, { data: suppliers }] = await Promise.all([
     supabase.from("items").select("*").eq("active", true).order("name"),
-    supabase.from("suppliers").select("id, name").order("name"),
+    supabase.from("suppliers").select("id, name").eq("is_placeholder", false).order("name"),
   ]);
 
   if (error)
@@ -28,7 +28,7 @@ export default async function NovaMovimentacaoPage({
       <div className="flex max-w-4xl flex-col gap-4">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Entrada de estoque</h1>
-          <p className="text-sm text-muted">Uma nota com um ou vários produtos — bipe o código de barras de cada um.</p>
+          <p className="text-sm text-muted">Uma nota com um ou vários produtos — bipe o código de barras (ou digite SKU/nome). O fornecedor é perguntado uma vez só.</p>
         </div>
         <StockEntryForm items={(items as Item[]) ?? []} suppliers={(suppliers as Pick<Supplier, "id" | "name">[]) ?? []} />
       </div>

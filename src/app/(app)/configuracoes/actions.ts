@@ -39,12 +39,15 @@ export async function saveSettings(_prev: SettingsState, formData: FormData): Pr
     { key: "discount_limit_percent_gerente", value: discountManager },
     { key: "max_interest_percent", value: maxInterest },
     { key: "notify_events", value: events },
+    { key: "low_stock_include_minimum", value: formData.get("low_stock_include_minimum") === "on" },
   ].map((r) => ({ ...r, updated_by: employee.id, updated_at: now }));
 
   const { error } = await supabase.from("app_settings").upsert(rows, { onConflict: "key" });
   if (error) return { error: error.code === "42501" ? "Sem permissão para alterar configurações." : error.message };
 
   revalidatePath("/configuracoes");
+  // a regra de estoque baixo mudou: todas as telas que listam alertas precisam recalcular
+  for (const path of ["/dashboard", "/itens", "/relatorios/reposicao"]) revalidatePath(path);
   return { ok: true };
 }
 

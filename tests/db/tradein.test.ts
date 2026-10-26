@@ -19,7 +19,7 @@ describe("venda com entrada (troca)", () => {
     const item = await addItem(db, { name: "Relógio novo", price: 1000, stock: 5 });
     const sale = await sell(db, ids.seller, {
       items: [{ item_id: item, quantity: 1 }],
-      tradeIn: { item_name: "Relógio Casio usado", category: "Relógios", value: 300 },
+      tradeIn: { item_name: "Relogio Casio usado", category: "Relógios", value: 300 },
     });
     expect(sale.total).toBe(700);
 
@@ -34,7 +34,7 @@ describe("venda com entrada (troca)", () => {
       "select name, condition, quantity, cost_price, category from items where id = $1",
       [row.trade_in_item_id]
     );
-    expect(ti.name).toBe("Relógio Casio usado");
+    expect(ti.name).toBe("RELOGIO CASIO USADO");
     expect(ti.condition).toBe("seminovo");
     expect(Number(ti.quantity)).toBe(1);
     expect(Number(ti.cost_price)).toBe(300);

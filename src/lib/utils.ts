@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { STORE_TZ } from "./dates";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -15,7 +16,9 @@ export function formatCurrency(value: number | null | undefined) {
 
 export function formatDate(value: string | Date, withTime = false) {
   const date = typeof value === "string" ? new Date(value) : value;
+  // sempre no fuso da loja: o servidor roda em UTC e venda das 22h cairia no dia seguinte
   return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: STORE_TZ,
     day: "2-digit",
     month: "2-digit",
     year: "numeric",

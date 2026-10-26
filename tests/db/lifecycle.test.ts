@@ -203,16 +203,18 @@ describe("alertas de estoque (LOW_STOCK / OUT_OF_STOCK)", () => {
 
     await sellQty(5); // 10 → 5 (acima do mínimo)
     expect(await count("LOW_STOCK")).toBe(0);
-    await sellQty(2); // 5 → 3 (= mínimo → estoque baixo)
+    await sellQty(2); // 5 → 3 (= mínimo: NÃO é baixo — baixo é ABAIXO do mínimo)
+    expect(await count("LOW_STOCK")).toBe(0);
+    await sellQty(1); // 3 → 2 (abaixo do mínimo → estoque baixo)
     expect(await count("LOW_STOCK")).toBe(1);
-    await sellQty(1); // 3 → 2 (continua baixo: NÃO repete)
+    await sellQty(1); // 2 → 1 (continua baixo: NÃO repete)
     expect(await count("LOW_STOCK")).toBe(1);
-    await sellQty(2); // 2 → 0 (esgotado, não "baixo" de novo)
+    await sellQty(1); // 1 → 0 (esgotado, não "baixo" de novo)
     expect(await count("LOW_STOCK")).toBe(1);
     expect(await count("OUT_OF_STOCK")).toBe(1);
 
     const low = (await events("LOW_STOCK")).find((e) => e.payload.item_id === item)!;
-    expect(low.payload).toMatchObject({ name: "Alertas", quantity: 3, min_stock: 3 });
+    expect(low.payload).toMatchObject({ name: "ALERTAS", quantity: 2, min_stock: 3 });
   });
 
   it("reposição + nova queda gera novo alerta (é outra ocorrência)", async () => {
@@ -221,18 +223,24 @@ describe("alertas de estoque (LOW_STOCK / OUT_OF_STOCK)", () => {
     await sell(db, ids.seller, { items: [{ item_id: item, quantity: 4 }] }); // 5 → 1: baixo
     expect(await count()).toBe(1);
     await db.q("insert into movements (item_id, type, subtype, quantity, created_by) values ($1,'entrada','compra',10,$2)", [item, ids.admin]);
-    await sell(db, ids.seller, { items: [{ item_id: item, quantity: 9 }] }); // 11 → 2: baixo de novo
+    await sell(db, ids.seller, { items: [{ item_id: item, quantity: 10 }] }); // 11 → 1: baixo de novo
     expect(await count()).toBe(2);
   });
 
-  it("produto sem estoque mínimo só avisa quando ESGOTA; produto recém-cadastrado em 0 não gera nada", async () => {
+  it("produto com mínimo 0 NUNCA alerta (nem baixo, nem esgotado); recém-cadastrado em 0 não gera nada", async () => {
     const before = (await events("OUT_OF_STOCK")).length;
     await addItem(db, { name: "Recém-cadastrado", stock: 0 });
     expect((await events("OUT_OF_STOCK")).length).toBe(before);
 
     const item = await addItem(db, { name: "Sem mínimo", price: 10, stock: 3, min: 0 });
-    await sell(db, ids.seller, { items: [{ item_id: item, quantity: 2 }] }); // 3 → 1: sem alerta (mínimo 0)
+    await sell(db, ids.seller, { items: [{ item_id: item, quantity: 2 }] }); // 3 → 1
+    await sell(db, ids.seller, { items: [{ item_id: item, quantity: 1 }] }); // 1 → 0
     expect((await events("LOW_STOCK")).filter((e) => e.payload.item_id === item)).toHaveLength(0);
+    expect((await events("OUT_OF_STOCK")).filter((e) => e.payload.item_id === item)).toHaveLength(0);
+  });
+
+  it("mínimo definido: avisa ESGOTADO ao zerar", async () => {
+    const item = await addItem(db, { name: "Com mínimo", price: 10, stock: 1, min: 1 });
     await sell(db, ids.seller, { items: [{ item_id: item, quantity: 1 }] }); // 1 → 0
     expect((await events("OUT_OF_STOCK")).filter((e) => e.payload.item_id === item)).toHaveLength(1);
   });
@@ -264,21 +272,50 @@ describe("alertas de estoque (LOW_STOCK / OUT_OF_STOCK)", () => {
     );
   });
 
-  it("stock_alerts(): baixo = mínimo definido e saldo > 0; esgotado só se já teve movimento", async () => {
-    const low = await addItem(db, { name: "AL baixo", stock: 2, min: 5 });
-    const out = await addItem(db, { name: "AL esgotado", price: 10, stock: 1 });
-    await sell(db, ids.seller, { items: [{ item_id: out, quantity: 1 }] });
-    const neverStocked = await addItem(db, { name: "AL nunca estocado", stock: 0 });
-    const noMin = await addItem(db, { name: "AL sem mínimo", stock: 1, min: 0 });
+  const alertsNow = () =>
+    db.asUser(ids.manager, async (c) => (await c.query("select public.stock_alerts() r")).rows[0].r as { low: { id: string; suggestion: number }[]; out: { id: string; suggestion: number }[] });
 
-    const alerts = await db.asUser(ids.manager, async (c) => (await c.query("select public.stock_alerts() r")).rows[0].r as { low: { id: string }[]; out: { id: string }[] });
+  it("stock_alerts(): baixo = saldo ABAIXO do mínimo; esgotado = saldo 0 (mesmo sem nenhuma entrada); mínimo 0 nunca alerta", async () => {
+    const low = await addItem(db, { name: "AL baixo", stock: 2, min: 5 });
+    const atMin = await addItem(db, { name: "AL no mínimo", stock: 1, min: 1 });
+    const out = await addItem(db, { name: "AL esgotado", price: 10, stock: 1, min: 1 });
+    await sell(db, ids.seller, { items: [{ item_id: out, quantity: 1 }] });
+    const neverStocked = await addItem(db, { name: "AL nunca estocado", stock: 0, min: 2 });
+    const noMin = await addItem(db, { name: "AL sem mínimo", stock: 0, min: 0 });
+
+    const alerts = await alertsNow();
     const lowIds = alerts.low.map((x) => x.id);
     const outIds = alerts.out.map((x) => x.id);
     expect(lowIds).toContain(low);
+    expect(lowIds).not.toContain(atMin); // 1 un / mín. 1 un NÃO é estoque baixo
     expect(lowIds).not.toContain(noMin);
     expect(outIds).toContain(out);
-    expect(outIds).not.toContain(neverStocked); // 46 produtos recém-cadastrados não viram "46 esgotados"
+    expect(outIds).toContain(neverStocked); // mesma definição em todas as telas: saldo 0 = esgotado
+    expect(outIds).not.toContain(noMin);
     expect(lowIds).not.toContain(out);
+  });
+
+  it("configuração low_stock_include_minimum: ligada, saldo = mínimo passa a contar como baixo (explícito, nunca implícito)", async () => {
+    const d = await createTestDb("upgrade");
+    const atMin = await addItem(d, { name: "CFG no mínimo", stock: 2, min: 2 });
+    const lowIds = async () =>
+      (await d.asUser(ids.manager, async (c) => (await c.query("select public.stock_alerts() r")).rows[0].r as { low: { id: string }[] })).low.map((x) => x.id);
+    expect(await lowIds()).not.toContain(atMin);
+    await d.q("update app_settings set value = 'true' where key = 'low_stock_include_minimum'");
+    expect(await lowIds()).toContain(atMin);
+    await d.close();
+  });
+
+  it("sugestão de compra = mínimo − saldo (no mínimo 1 un): nunca vazia para item listado", async () => {
+    const a = await addItem(db, { name: "SUG a", stock: 2, min: 3 }); // falta 1
+    const b = await addItem(db, { name: "SUG b", stock: 1, min: 3 }); // falta 2
+    const c = await addItem(db, { name: "SUG c", stock: 0, min: 4 }); // falta 4
+    const alerts = await alertsNow();
+    const sug = (id: string) => Number([...alerts.low, ...alerts.out].find((x) => x.id === id)!.suggestion);
+    expect(sug(a)).toBe(1);
+    expect(sug(b)).toBe(2);
+    expect(sug(c)).toBe(4);
+    for (const x of [...alerts.low, ...alerts.out]) expect(Number(x.suggestion)).toBeGreaterThan(0);
   });
 });
 
@@ -508,8 +545,8 @@ describe("conteúdo do evento de venda (o que o Telegram vai mostrar)", () => {
     const [ev] = await events("SALE_COMPLETED", sale.sale_id);
     const p = ev.payload as Record<string, unknown> & { items: Record<string, unknown>[]; stock: Record<string, unknown>[]; payment: Record<string, unknown> };
     expect(p).toMatchObject({ code: sale.code, seller: "Marina Gerente", customer: "Carlos Oliveira", subtotal: 4499, discount: 100, interest: 299.13, total: 4698.13 });
-    expect(p.items[0]).toMatchObject({ name: "iPhone 15 128GB", quantity: 1, unit_price: 4499 });
-    expect(p.stock[0]).toMatchObject({ name: "iPhone 15 128GB", before: 7, after: 6 });
+    expect(p.items[0]).toMatchObject({ name: "IPHONE 15 128GB", quantity: 1, unit_price: 4499 });
+    expect(p.stock[0]).toMatchObject({ name: "IPHONE 15 128GB", before: 7, after: 6 });
     expect(p.payment).toMatchObject({ method: "credito_parcelado", installments: 10, installment_value: 469.81, interest_percent: 6.8, card_brand: "master", fee_percent: 8.89 });
   });
 });

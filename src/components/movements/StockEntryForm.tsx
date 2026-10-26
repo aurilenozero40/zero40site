@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Package, ScanBarcode, Trash2, X } from "lucide-react";
 import { createStockEntryAction, createSupplierQuickAction, type SupplierHit } from "@/app/(app)/movimentacoes/actions";
 import { createItemQuickAction } from "@/app/(app)/itens/actions";
-import { normalizeBarcode } from "@/lib/barcode";
+import { findItemByCode, normalizeCode } from "@/lib/barcode";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Item } from "@/lib/types";
 
@@ -21,83 +21,86 @@ interface EntryLine {
   name: string;
   unit: string;
   trackSerial: boolean;
-  supplierId: string;
-  supplierName: string;
   qtyText: string;
   serials: string[];
   unitValueText: string;
 }
 
-interface PendingSupplier {
-  item: Item;
-}
-
-interface PendingSerial {
-  item: Item;
-  supplierId: string;
-  supplierName: string;
-}
-
 interface NewItemDraft {
   name: string;
   sku: string;
+  barcode: string;
   salePrice: string;
   trackSerial: boolean;
 }
+
+const EMPTY_DRAFT: NewItemDraft = { name: "", sku: "", barcode: "", salePrice: "", trackSerial: false };
 
 const parseNumber = (text: string) => {
   const n = Number(text.replace(",", ".").trim());
   return Number.isFinite(n) ? n : 0;
 };
 
-/** Preenche o valor unitário com o último custo conhecido do produto — o usuário ainda pode corrigir. */
+const lineQty = (l: EntryLine) => (l.trackSerial ? l.serials.length : parseNumber(l.qtyText));
+
+/** Preenche o custo unitário com o último custo conhecido do produto — o usuário ainda pode corrigir. */
 const defaultUnitValueText = (item: Item) => (item.cost_price != null ? item.cost_price.toFixed(2).replace(".", ",") : "");
 
 /**
- * Entrada de estoque: uma NOTA com vários produtos de uma vez. Bipar o mesmo item do mesmo
- * fornecedor de novo só soma na mesma linha (grupo, por quantidade); item diferente, ou o
- * mesmo item com número de série, vira linha própria (individual).
+ * Entrada de estoque: uma NOTA com vários produtos. O fornecedor é da nota — perguntado uma única
+ * vez, no primeiro item — e vale para todos os itens. Bipar o mesmo produto de novo soma na linha.
+ * Fornecedor e chave de idempotência voltam ao estado inicial ao limpar, registrar ou esvaziar a nota.
  */
 export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers: SupplierHit[] }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
   const [localItems, setLocalItems] = useState(items);
+  const [localSuppliers, setLocalSuppliers] = useState(suppliers);
   const [subtype, setSubtype] = useState("compra");
   const [reason, setReason] = useState("");
   const [lines, setLines] = useState<EntryLine[]>([]);
+  const [noteSupplierId, setNoteSupplierId] = useState("");
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [notice, setNotice] = useState<{ kind: "error" | "info" | "ok"; text: string } | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const [barcodeInput, setBarcodeInput] = useState("");
   const barcodeRef = useRef<HTMLInputElement>(null);
 
-  // Código bipado que ainda não existe no catálogo: cadastra ali mesmo, sem trocar de tela.
-  const [pendingNewItem, setPendingNewItem] = useState<string | null>(null); // guarda o código de barras
-  const [newItemDraft, setNewItemDraft] = useState<NewItemDraft>({ name: "", sku: "", salePrice: "", trackSerial: false });
-  const [newItemPending, setNewItemPending] = useState(false);
-  const [newItemError, setNewItemError] = useState<string | null>(null);
-  const newItemNameRef = useRef<HTMLInputElement>(null);
+  // Sugestões ("você quis dizer…?") quando o texto não é um código exato.
+  const [suggestions, setSuggestions] = useState<{ text: string; items: Item[] } | null>(null);
 
-  const [localSuppliers, setLocalSuppliers] = useState(suppliers);
-  const [pendingSupplier, setPendingSupplier] = useState<PendingSupplier | null>(null);
+  // Primeiro item da nota esperando o fornecedor ser escolhido.
+  const [pendingSupplierItem, setPendingSupplierItem] = useState<Item | null>(null);
   const [supplierDraftId, setSupplierDraftId] = useState("");
   const [addingSupplier, setAddingSupplier] = useState(false);
   const [newSupplierName, setNewSupplierName] = useState("");
   const [supplierPending, setSupplierPending] = useState(false);
+  const supplierRef = useRef<HTMLSelectElement>(null);
 
-  const [pendingSerial, setPendingSerial] = useState<PendingSerial | null>(null);
+  // Código que ainda não existe no catálogo: cadastra ali mesmo, sem trocar de tela.
+  const [pendingNewItem, setPendingNewItem] = useState(false);
+  const [newItemDraft, setNewItemDraft] = useState<NewItemDraft>(EMPTY_DRAFT);
+  const [newItemPending, setNewItemPending] = useState(false);
+  const [newItemError, setNewItemError] = useState<string | null>(null);
+  const newItemNameRef = useRef<HTMLInputElement>(null);
+
+  const [pendingSerial, setPendingSerial] = useState<Item | null>(null);
   const [serialInput, setSerialInput] = useState("");
   const [serialError, setSerialError] = useState<string | null>(null);
   const serialRef = useRef<HTMLInputElement>(null);
-  const supplierRef = useRef<HTMLSelectElement>(null);
+
+  const needsSupplier = subtype === "compra";
+  const noteSupplierName = localSuppliers.find((s) => s.id === noteSupplierId)?.name ?? "";
+  const busy = !!pendingSupplierItem || !!pendingSerial || pendingNewItem;
 
   useEffect(() => {
     if (pendingSerial) serialRef.current?.focus();
   }, [pendingSerial]);
   useEffect(() => {
-    if (pendingSupplier) supplierRef.current?.focus();
-  }, [pendingSupplier]);
+    if (pendingSupplierItem) supplierRef.current?.focus();
+  }, [pendingSupplierItem]);
   useEffect(() => {
     if (pendingNewItem) newItemNameRef.current?.focus();
   }, [pendingNewItem]);
@@ -107,62 +110,85 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
     return () => clearTimeout(t);
   }, [notice]);
 
-  function addOrIncrement(item: Item, supplierId: string, supplierName: string) {
+  const focusScanner = () => setTimeout(() => barcodeRef.current?.focus(), 0);
+
+  /** Volta a nota ao estado inicial: sem itens, sem fornecedor, nova chave de idempotência. */
+  function resetNote() {
+    setLines([]);
+    setNoteSupplierId("");
+    setReason("");
+    setSubmitError(null);
+    setSuggestions(null);
+    setIdempotencyKey(crypto.randomUUID());
+  }
+
+  function addOrIncrement(item: Item) {
     setLines((prev) => {
-      const idx = prev.findIndex((l) => l.itemId === item.id && l.supplierId === supplierId);
+      const idx = prev.findIndex((l) => l.itemId === item.id);
       if (idx >= 0) {
         const next = [...prev];
         next[idx] = { ...next[idx], qtyText: String(parseNumber(next[idx].qtyText) + 1) };
         return next;
       }
-      return [
-        ...prev,
-        { itemId: item.id, name: item.name, unit: item.unit, trackSerial: false, supplierId, supplierName, qtyText: "1", serials: [], unitValueText: defaultUnitValueText(item) },
-      ];
+      return [...prev, { itemId: item.id, name: item.name, unit: item.unit, trackSerial: false, qtyText: "1", serials: [], unitValueText: defaultUnitValueText(item) }];
     });
     setNotice({ kind: "ok", text: `${item.name} adicionado.` });
+    focusScanner();
   }
 
-  function proceedWithSupplier(item: Item, supplierId: string, supplierName: string) {
+  function proceedWithItem(item: Item) {
     if (item.track_serial) {
-      setPendingSerial({ item, supplierId, supplierName });
+      setPendingSerial(item);
       setSerialInput("");
       setSerialError(null);
     } else {
-      addOrIncrement(item, supplierId, supplierName);
-      barcodeRef.current?.focus();
+      addOrIncrement(item);
     }
   }
 
   function handleFoundItem(item: Item) {
-    const existingLine = lines.find((l) => l.itemId === item.id);
-    const knownId = item.supplier_id ?? existingLine?.supplierId ?? null;
-    if (!knownId) {
-      setPendingSupplier({ item });
+    setSuggestions(null);
+    // Só o PRIMEIRO item da nota dispara a pergunta — e só em compra (os demais motivos não exigem fornecedor).
+    if (lines.length === 0 && needsSupplier && !noteSupplierId) {
+      setPendingSupplierItem(item);
       setSupplierDraftId("");
       return;
     }
-    const knownName = localSuppliers.find((s) => s.id === knownId)?.name ?? existingLine?.supplierName ?? "";
-    proceedWithSupplier(item, knownId, knownName);
+    proceedWithItem(item);
   }
 
-  function handleBarcodeScan() {
-    const normalized = normalizeBarcode(barcodeInput);
-    if (!normalized) return;
-    const found = localItems.find((i) => normalizeBarcode(i.barcode) === normalized);
-    setBarcodeInput("");
-    if (!found) {
-      // Código novo: cadastra o produto ali mesmo em vez de travar o usuário numa tela vazia.
-      setPendingNewItem(normalized);
-      setNewItemDraft({ name: "", sku: "", salePrice: "", trackSerial: false });
-      setNewItemError(null);
+  function handleScan() {
+    const code = normalizeCode(barcodeInput);
+    if (!code) return;
+    const match = findItemByCode(localItems, code);
+
+    if (match.kind === "exact") {
+      setBarcodeInput("");
+      return handleFoundItem(match.item);
+    }
+    if (match.kind === "similar") {
+      // mesmo código com/sem zero à esquerda: confirma antes de usar
+      setSuggestions({ text: code, items: [match.item] });
       return;
     }
-    handleFoundItem(found);
+    if (match.kind === "names") {
+      setSuggestions({ text: code, items: match.items });
+      return;
+    }
+    // Nada parecido: oferece cadastrar. Texto com espaço é nome; sem espaço é o código (como texto, com zeros).
+    const looksLikeName = /\s/.test(code);
+    setNewItemDraft({ ...EMPTY_DRAFT, name: looksLikeName ? code : "", barcode: looksLikeName ? "" : code });
+    setNewItemError(null);
+    setPendingNewItem(true);
+  }
+
+  function pickSuggestion(item: Item) {
+    setBarcodeInput("");
+    setSuggestions(null);
+    handleFoundItem(item);
   }
 
   async function submitNewItem() {
-    if (!pendingNewItem) return;
     const name = newItemDraft.name.trim();
     if (!name) return setNewItemError("Informe o nome do produto.");
     setNewItemError(null);
@@ -170,26 +196,27 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
     const r = await createItemQuickAction({
       name,
       sku: newItemDraft.sku || null,
-      barcode: pendingNewItem,
+      barcode: newItemDraft.barcode || null,
       salePrice: newItemDraft.salePrice ? Number(newItemDraft.salePrice.replace(",", ".")) : null,
       trackSerial: newItemDraft.trackSerial,
     });
     setNewItemPending(false);
     if (!r.ok) return setNewItemError(r.error);
     setLocalItems((prev) => [...prev, r.data]);
-    setPendingNewItem(null);
+    setPendingNewItem(false);
+    setBarcodeInput("");
     setNotice({ kind: "ok", text: `${r.data.name} cadastrado.` });
     handleFoundItem(r.data);
   }
 
-  // Escolher o fornecedor já avança sozinho — sem precisar de um clique extra em "Confirmar".
+  // Escolher o fornecedor da nota já adiciona o primeiro item — sem clique extra em "Confirmar".
   function chooseSupplier(supplierId: string) {
-    if (!pendingSupplier || !supplierId) return;
-    const name = localSuppliers.find((s) => s.id === supplierId)?.name ?? "";
-    const item = pendingSupplier.item;
-    setPendingSupplier(null);
+    if (!pendingSupplierItem || !supplierId) return;
+    const item = pendingSupplierItem;
+    setNoteSupplierId(supplierId);
+    setPendingSupplierItem(null);
     setSupplierDraftId("");
-    proceedWithSupplier(item, supplierId, name);
+    proceedWithItem(item);
   }
 
   async function submitNewSupplier() {
@@ -198,10 +225,11 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
     const r = await createSupplierQuickAction(newSupplierName);
     setSupplierPending(false);
     if (r.error || !r.data) return setNotice({ kind: "error", text: r.error ?? "Não foi possível cadastrar o fornecedor." });
-    setLocalSuppliers((prev) => [...prev, r.data!].sort((a, b) => a.name.localeCompare(b.name)));
+    setLocalSuppliers((prev) => [...prev.filter((s) => s.id !== r.data!.id), r.data!].sort((a, b) => a.name.localeCompare(b.name)));
     setAddingSupplier(false);
     setNewSupplierName("");
-    chooseSupplier(r.data.id);
+    if (pendingSupplierItem) chooseSupplier(r.data.id);
+    else setNoteSupplierId(r.data.id);
   }
 
   function confirmSerialScan() {
@@ -212,27 +240,15 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
       setSerialError(`${s} já foi bipado nesta entrada.`);
       return;
     }
+    const item = pendingSerial;
     setLines((prev) => {
-      const idx = prev.findIndex((l) => l.itemId === pendingSerial.item.id && l.supplierId === pendingSerial.supplierId);
+      const idx = prev.findIndex((l) => l.itemId === item.id);
       if (idx >= 0) {
         const next = [...prev];
         next[idx] = { ...next[idx], serials: [...next[idx].serials, s] };
         return next;
       }
-      return [
-        ...prev,
-        {
-          itemId: pendingSerial.item.id,
-          name: pendingSerial.item.name,
-          unit: pendingSerial.item.unit,
-          trackSerial: true,
-          supplierId: pendingSerial.supplierId,
-          supplierName: pendingSerial.supplierName,
-          qtyText: "",
-          serials: [s],
-          unitValueText: defaultUnitValueText(pendingSerial.item),
-        },
-      ];
+      return [...prev, { itemId: item.id, name: item.name, unit: item.unit, trackSerial: true, qtyText: "", serials: [s], unitValueText: defaultUnitValueText(item) }];
     });
     setSerialInput("");
   }
@@ -241,55 +257,66 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
     setPendingSerial(null);
     setSerialInput("");
     setSerialError(null);
-    barcodeRef.current?.focus();
+    focusScanner();
   }
 
-  function removeLine(itemId: string, supplierId: string) {
-    setLines((prev) => prev.filter((l) => !(l.itemId === itemId && l.supplierId === supplierId)));
+  /** Aplica a mudança nas linhas; se a nota ficou vazia, volta ao estado inicial (pergunta o fornecedor de novo). */
+  function updateLines(fn: (prev: EntryLine[]) => EntryLine[]) {
+    const next = fn(lines);
+    if (next.length === 0) {
+      resetNote();
+      return;
+    }
+    setLines(next);
   }
 
-  function removeSerialFromLine(itemId: string, supplierId: string, serial: string) {
-    setLines((prev) =>
+  const removeLine = (itemId: string) => updateLines((prev) => prev.filter((l) => l.itemId !== itemId));
+  const removeSerialFromLine = (itemId: string, serial: string) =>
+    updateLines((prev) =>
       prev.flatMap((l) => {
-        if (l.itemId !== itemId || l.supplierId !== supplierId) return [l];
+        if (l.itemId !== itemId) return [l];
         const nextSerials = l.serials.filter((s) => s !== serial);
         return nextSerials.length === 0 ? [] : [{ ...l, serials: nextSerials }];
       })
     );
-  }
 
   const blocking: string[] = [];
+  if (lines.length > 0 && needsSupplier && !noteSupplierId) blocking.push("Informe o fornecedor da nota.");
   for (const l of lines) {
-    const qty = l.trackSerial ? l.serials.length : parseNumber(l.qtyText);
-    if (qty <= 0) blocking.push(`Quantidade inválida: ${l.name}`);
-    if (subtype === "compra" && !l.supplierId) blocking.push(`Informe o fornecedor de ${l.name}`);
+    if (lineQty(l) <= 0) blocking.push(`Quantidade inválida: ${l.name}`);
   }
-  const canSubmit = lines.length > 0 && blocking.length === 0 && !pendingSupplier && !pendingSerial;
+  const canSubmit = lines.length > 0 && blocking.length === 0 && !busy;
 
   function submit() {
+    if (pending || !canSubmit) return; // clique duplo: o botão já está travado e o servidor ainda confere a chave
     setSubmitError(null);
     startTransition(async () => {
       const r = await createStockEntryAction({
         subtype,
         reason: reason.trim() || null,
+        supplierId: noteSupplierId || null,
+        idempotencyKey,
         items: lines.map((l) => ({
           itemId: l.itemId,
           quantity: l.trackSerial ? undefined : parseNumber(l.qtyText),
           unitValue: parseNumber(l.unitValueText) || null,
-          supplierId: l.supplierId || null,
           serials: l.trackSerial ? l.serials : undefined,
         })),
       });
       if (!r.ok) return setSubmitError(r.error);
+      resetNote();
       router.push("/movimentacoes");
     });
   }
+
+  const totalUnits = lines.reduce((s, l) => s + lineQty(l), 0);
+  const totalValue = lines.reduce((s, l) => s + lineQty(l) * parseNumber(l.unitValueText), 0);
 
   return (
     <div className="flex flex-col gap-4">
       <div className="card flex flex-col gap-2">
         <label htmlFor="stock_entry_barcode" className="label mb-0">
-          Código de barras
+          Código de barras, SKU ou nome
         </label>
         <div className="relative">
           <ScanBarcode size={18} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
@@ -298,16 +325,18 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
             ref={barcodeRef}
             autoFocus
             autoComplete="off"
-            inputMode="numeric"
-            disabled={!!pendingSupplier || !!pendingSerial || !!pendingNewItem}
+            disabled={busy}
             className="input h-11 pl-10 text-base disabled:opacity-50"
-            placeholder="Bipe o código de barras do produto"
+            placeholder="Bipe o código de barras, ou digite o SKU / nome e aperte Enter"
             value={barcodeInput}
-            onChange={(e) => setBarcodeInput(e.target.value)}
+            onChange={(e) => {
+              setBarcodeInput(e.target.value);
+              if (suggestions) setSuggestions(null);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                handleBarcodeScan();
+                handleScan();
               }
             }}
           />
@@ -318,16 +347,47 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
             {notice.text}
           </p>
         )}
+        {suggestions && (
+          <div className="flex flex-col gap-1.5 rounded-md border border-accent/40 bg-accent/5 p-3">
+            <p className="text-sm font-medium text-foreground">
+              {suggestions.items.length === 1 ? "Você quis dizer este produto?" : "Esses produtos batem com o que você digitou:"}
+            </p>
+            <ul className="flex flex-col gap-1">
+              {suggestions.items.map((i) => (
+                <li key={i.id}>
+                  <button type="button" className="flex w-full items-center justify-between gap-3 rounded px-2 py-1.5 text-left text-sm hover:bg-background" onClick={() => pickSuggestion(i)}>
+                    <span className="font-medium text-foreground">{i.name}</span>
+                    <span className="font-mono text-xs text-muted">{i.sku ?? i.barcode ?? "sem código"}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="self-start text-xs text-muted hover:text-foreground"
+              onClick={() => {
+                const code = suggestions.text;
+                setSuggestions(null);
+                const looksLikeName = /\s/.test(code);
+                setNewItemDraft({ ...EMPTY_DRAFT, name: looksLikeName ? code : "", barcode: looksLikeName ? "" : code });
+                setNewItemError(null);
+                setPendingNewItem(true);
+              }}
+            >
+              Nenhum desses — cadastrar produto novo
+            </button>
+          </div>
+        )}
       </div>
 
       {pendingNewItem && (
         <div className="card flex flex-col gap-3 border-accent/40 bg-accent/5">
           <div>
-            <p className="text-sm font-medium text-foreground">Produto novo — código de barras {pendingNewItem}</p>
-            <p className="text-xs text-muted">Esse código ainda não está cadastrado. Preencha o essencial aqui — dá pra completar o resto depois em Produtos.</p>
+            <p className="text-sm font-medium text-foreground">Produto novo</p>
+            <p className="text-xs text-muted">Nenhum produto com esse código, SKU ou nome. Preencha o essencial aqui — dá pra completar o resto depois em Produtos.</p>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div className="sm:col-span-2">
+            <div className="sm:col-span-3">
               <label className="label" htmlFor="new_item_name">
                 Nome *
               </label>
@@ -346,21 +406,21 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
               />
             </div>
             <div>
+              <label className="label" htmlFor="new_item_barcode">
+                Código de barras
+              </label>
+              <input
+                id="new_item_barcode"
+                className="input font-mono"
+                value={newItemDraft.barcode}
+                onChange={(e) => setNewItemDraft((d) => ({ ...d, barcode: e.target.value }))}
+              />
+            </div>
+            <div>
               <label className="label" htmlFor="new_item_sku">
                 SKU
               </label>
-              <input
-                id="new_item_sku"
-                className="input"
-                value={newItemDraft.sku}
-                onChange={(e) => setNewItemDraft((d) => ({ ...d, sku: e.target.value }))}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void submitNewItem();
-                  }
-                }}
-              />
+              <input id="new_item_sku" className="input font-mono" value={newItemDraft.sku} onChange={(e) => setNewItemDraft((d) => ({ ...d, sku: e.target.value }))} />
             </div>
             <div>
               <label className="label" htmlFor="new_item_price">
@@ -381,12 +441,8 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
                 }}
               />
             </div>
-            <label className="flex items-center gap-2 text-sm text-foreground sm:col-span-2">
-              <input
-                type="checkbox"
-                checked={newItemDraft.trackSerial}
-                onChange={(e) => setNewItemDraft((d) => ({ ...d, trackSerial: e.target.checked }))}
-              />
+            <label className="flex items-center gap-2 text-sm text-foreground sm:col-span-3">
+              <input type="checkbox" checked={newItemDraft.trackSerial} onChange={(e) => setNewItemDraft((d) => ({ ...d, trackSerial: e.target.checked }))} />
               Esse produto tem número de série (IMEI)
             </label>
           </div>
@@ -403,8 +459,8 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
               type="button"
               className="btn-secondary"
               onClick={() => {
-                setPendingNewItem(null);
-                barcodeRef.current?.focus();
+                setPendingNewItem(false);
+                focusScanner();
               }}
             >
               Cancelar
@@ -413,12 +469,12 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
         </div>
       )}
 
-      {pendingSupplier && (
+      {pendingSupplierItem && (
         <div className="card flex flex-col gap-2 border-accent/40 bg-accent/5">
-          <p className="text-sm font-medium text-foreground">
-            De qual fornecedor veio <strong>{pendingSupplier.item.name}</strong>?
+          <p className="text-sm font-medium text-foreground">De qual fornecedor é esta nota?</p>
+          <p className="text-xs text-muted">
+            Só perguntamos agora, no primeiro item (<strong>{pendingSupplierItem.name}</strong>) — todos os outros itens desta nota vão com o mesmo fornecedor.
           </p>
-          <p className="text-xs text-muted">Só perguntamos uma vez — as próximas entradas desse produto já vêm com o fornecedor preenchido.</p>
           {addingSupplier ? (
             <div className="flex gap-2">
               <input
@@ -443,12 +499,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
             </div>
           ) : (
             <div className="flex gap-2">
-              <select
-                ref={supplierRef}
-                className="input"
-                value={supplierDraftId}
-                onChange={(e) => chooseSupplier(e.target.value)}
-              >
+              <select ref={supplierRef} aria-label="Fornecedor da nota" className="input" value={supplierDraftId} onChange={(e) => chooseSupplier(e.target.value)}>
                 <option value="">Selecione...</option>
                 {localSuppliers.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -463,8 +514,8 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
                 type="button"
                 className="shrink-0 text-xs text-muted hover:text-danger"
                 onClick={() => {
-                  setPendingSupplier(null);
-                  barcodeRef.current?.focus();
+                  setPendingSupplierItem(null);
+                  focusScanner();
                 }}
               >
                 Cancelar
@@ -477,8 +528,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
       {pendingSerial && (
         <div className="card flex flex-col gap-2 border-accent/40 bg-accent/5">
           <p className="text-sm font-medium text-foreground">
-            Números de série de <strong>{pendingSerial.item.name}</strong>{" "}
-            <span className="font-normal text-muted">— fornecedor {pendingSerial.supplierName}</span>
+            Números de série de <strong>{pendingSerial.name}</strong>
           </p>
           <div className="flex gap-2">
             <input
@@ -510,9 +560,46 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
             </p>
           )}
           {(() => {
-            const count = lines.find((l) => l.itemId === pendingSerial.item.id && l.supplierId === pendingSerial.supplierId)?.serials.length ?? 0;
+            const count = lines.find((l) => l.itemId === pendingSerial.id)?.serials.length ?? 0;
             return count > 0 ? <p className="text-xs text-muted">{count} bipado(s) até agora.</p> : null;
           })()}
+        </div>
+      )}
+
+      {lines.length > 0 && (
+        <div className="card grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div>
+            <label className="label" htmlFor="stock_entry_supplier">
+              Fornecedor da nota {needsSupplier && "*"}
+            </label>
+            <select id="stock_entry_supplier" className="input" value={noteSupplierId} onChange={(e) => setNoteSupplierId(e.target.value)}>
+              <option value="">{needsSupplier ? "Selecione..." : "Sem fornecedor"}</option>
+              {localSuppliers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-muted">Vale para todos os itens desta nota.</p>
+          </div>
+          <div>
+            <label className="label" htmlFor="stock_entry_subtype">
+              Motivo da entrada *
+            </label>
+            <select id="stock_entry_subtype" className="input" value={subtype} onChange={(e) => setSubtype(e.target.value)}>
+              {SUBTYPES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label" htmlFor="stock_entry_reason">
+              Observação
+            </label>
+            <input id="stock_entry_reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Ex: nota fiscal 12345" />
+          </div>
         </div>
       )}
 
@@ -521,26 +608,25 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
           <div className="flex flex-col items-center gap-2 px-4 py-16 text-center text-muted">
             <Package size={28} className="opacity-50" />
             <p className="text-sm">Nenhum item nesta nota ainda.</p>
-            <p className="text-xs">Bipe o código de barras do produto para começar.</p>
+            <p className="text-xs">Bipe o código de barras (ou digite SKU/nome) do produto para começar.</p>
           </div>
         ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">
                 <th className="px-4 py-3">Produto</th>
-                <th className="px-4 py-3">Fornecedor</th>
                 <th className="px-4 py-3">Quantidade</th>
-                <th className="px-4 py-3 text-right">Valor unit. (R$)</th>
+                <th className="px-4 py-3 text-right">Custo unit. (R$)</th>
+                <th className="px-4 py-3 text-right">Valor total</th>
                 <th className="px-2 py-3" />
               </tr>
             </thead>
             <tbody>
               {lines.map((l) => (
-                <tr key={`${l.itemId}:${l.supplierId}`} className="border-b border-border last:border-0">
+                <tr key={l.itemId} className="border-b border-border last:border-0">
                   <td className="max-w-[220px] px-4 py-3">
                     <p className="truncate font-medium text-foreground">{l.name}</p>
                   </td>
-                  <td className="px-4 py-3 text-muted">{l.supplierName || "—"}</td>
                   <td className="px-4 py-3">
                     {l.trackSerial ? (
                       <div className="flex flex-col gap-1">
@@ -549,7 +635,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
                           {l.serials.map((s) => (
                             <li key={s} className="flex items-center gap-1 rounded-full bg-background px-2 py-0.5 font-mono text-[11px] text-muted">
                               {s}
-                              <button type="button" onClick={() => removeSerialFromLine(l.itemId, l.supplierId, s)} aria-label={`Remover ${s}`} className="hover:text-danger">
+                              <button type="button" onClick={() => removeSerialFromLine(l.itemId, s)} aria-label={`Remover ${s}`} className="hover:text-danger">
                                 <X size={10} />
                               </button>
                             </li>
@@ -562,24 +648,23 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
                         aria-label={`Quantidade de ${l.name}`}
                         className="input h-8 w-20 px-2 text-center"
                         value={l.qtyText}
-                        onChange={(e) =>
-                          setLines((prev) => prev.map((x) => (x.itemId === l.itemId && x.supplierId === l.supplierId ? { ...x, qtyText: e.target.value } : x)))
-                        }
+                        onChange={(e) => setLines((prev) => prev.map((x) => (x.itemId === l.itemId ? { ...x, qtyText: e.target.value } : x)))}
                       />
                     )}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <input
                       inputMode="decimal"
-                      aria-label={`Valor unitário de ${l.name}`}
+                      aria-label={`Custo unitário de ${l.name}`}
                       placeholder="0,00"
                       className="input h-8 w-24 px-2 text-right"
                       value={l.unitValueText}
-                      onChange={(e) => setLines((prev) => prev.map((x) => (x.itemId === l.itemId && x.supplierId === l.supplierId ? { ...x, unitValueText: e.target.value } : x)))}
+                      onChange={(e) => setLines((prev) => prev.map((x) => (x.itemId === l.itemId ? { ...x, unitValueText: e.target.value } : x)))}
                     />
                   </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-foreground">{formatCurrency(lineQty(l) * parseNumber(l.unitValueText))}</td>
                   <td className="px-2 py-3">
-                    <button type="button" className="rounded p-1.5 text-muted hover:bg-background hover:text-danger" onClick={() => removeLine(l.itemId, l.supplierId)} aria-label={`Remover ${l.name}`}>
+                    <button type="button" className="rounded p-1.5 text-muted hover:bg-background hover:text-danger" onClick={() => removeLine(l.itemId)} aria-label={`Remover ${l.name}`}>
                       <Trash2 size={16} />
                     </button>
                   </td>
@@ -590,31 +675,10 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
         )}
       </div>
 
-      <div className="card grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
-          <label className="label" htmlFor="stock_entry_subtype">
-            Motivo da entrada *
-          </label>
-          <select id="stock_entry_subtype" className="input" value={subtype} onChange={(e) => setSubtype(e.target.value)}>
-            {SUBTYPES.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="label" htmlFor="stock_entry_reason">
-            Observação
-          </label>
-          <input id="stock_entry_reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Ex: nota fiscal 12345" />
-        </div>
-      </div>
-
       {lines.length > 0 && (
         <p className="text-xs text-muted">
-          Total desta nota: {lines.reduce((s, l) => s + (l.trackSerial ? l.serials.length : parseNumber(l.qtyText)), 0)} unidade(s) ·{" "}
-          {formatCurrency(lines.reduce((s, l) => s + (l.trackSerial ? l.serials.length : parseNumber(l.qtyText)) * parseNumber(l.unitValueText), 0))}
+          Total desta nota: {totalUnits} unidade(s) · {formatCurrency(totalValue)}
+          {noteSupplierName && <> · fornecedor {noteSupplierName}</>}
         </p>
       )}
 
@@ -638,7 +702,14 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
           {pending ? "Registrando..." : "Registrar entrada"}
         </button>
         {lines.length > 0 && (
-          <button type="button" className="text-xs text-muted hover:text-danger" onClick={() => setLines([])}>
+          <button
+            type="button"
+            className="text-xs text-muted hover:text-danger"
+            onClick={() => {
+              resetNote();
+              focusScanner();
+            }}
+          >
             Limpar nota
           </button>
         )}

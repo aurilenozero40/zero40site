@@ -20,9 +20,10 @@
 --    8. Triggers ................ novo usuário, estoque, imutabilidade, auditoria
 --    9. Segurança ............... RLS + privilégios
 --   10. Regras de negócio ....... create_sale, cancel_sale, return_sale_items
---   11. Relatórios .............. dashboard, alertas de estoque, resumo mensal
+--   11. Relatórios .............. dashboard, regra única de estoque baixo/esgotado, reposição, resumo mensal
 --   12. Permissão de execução
---   13. Realtime
+--   13. Cadastro de produtos .... normalização, unicidade, auditoria de saldo
+--   14. Realtime
 --
 -- REGRAS QUE O BANCO GARANTE (nenhuma depende do frontend)
 --   • Estoque (items.quantity) SÓ muda por movimentação — nunca por UPDATE direto.
@@ -32,6 +33,12 @@
 --   • Preço, desconto, juros e taxa de cartão são calculados AQUI, não no navegador.
 --   • O evento de notificação nasce na MESMA transação da venda (outbox); se o
 --     Telegram cair, a venda continua válida e o envio é repetido depois.
+--   • Fornecedor é da NOTA de entrada: compra exige fornecedor e ele fica gravado em
+--     movements.supplier_id; "INVENTARIO" é placeholder e nunca vale como fornecedor.
+--   • Estoque baixo = saldo ABAIXO do mínimo; esgotado = saldo 0; mínimo 0 nunca alerta
+--     (stock_status é a regra única; Dashboard, Produtos e Reposição só leem dela).
+--   • Nome de produto em CAIXA ALTA; SKU/código de barras são texto, únicos e sem perder zero.
+--   • Entrada de estoque é idempotente (chave): clique duplo não registra duas vezes.
 --
 -- PERMISSÕES
 --                                   vendedor    gerente    admin / ceo
@@ -87,6 +94,13 @@ begin
 exception when others then
   raise notice 'Não foi possível criar índice único em suppliers (nomes duplicados existentes?): %', sqlerrm;
 end $$;
+
+-- "INVENTARIO" (e variações) é só o valor de migração/inventário inicial: não é fornecedor real.
+-- Fica no histórico, mas não aparece como opção em compras novas nem agrupa a Reposição.
+alter table public.suppliers add column if not exists is_placeholder boolean not null default false;
+update public.suppliers set is_placeholder = true
+ where not is_placeholder
+   and upper(translate(btrim(name), 'ÍÁÉÓÚíáéóú', 'IAEOUiaeou')) in ('INVENTARIO', 'INVENTARIO INICIAL', 'SEM FORNECEDOR');
 
 -- Fornecedores/origens de compra do lojista — pode crescer pela tela, isso aqui é só o ponto de partida.
 insert into public.suppliers (name)
@@ -198,6 +212,9 @@ create table if not exists public.card_fee_rates (
 
 -- ---- 2.1 colunas que versões antigas não tinham ------------------------------------
 alter table public.employees add column if not exists username text;
+-- Conta duplicada da mesma pessoa: aponta para a conta principal. As vendas antigas (imutáveis) continuam
+-- no id antigo, mas filtros e rankings agrupam pela conta principal (1 pessoa = 1 vendedor).
+alter table public.employees add column if not exists merged_into uuid references public.employees(id);
 alter table public.items     add column if not exists description text;
 alter table public.items     add column if not exists track_serial boolean not null default false;
 alter table public.items     add column if not exists condition text not null default 'novo';
@@ -214,6 +231,9 @@ exception when duplicate_object then null;
 end $$;
 alter table public.items     alter column created_by set default auth.uid();
 alter table public.movements add column if not exists sale_id uuid;
+-- De quem veio a entrada (compra). Movimentações antigas ficam sem — o ledger é imutável.
+alter table public.movements add column if not exists supplier_id uuid references public.suppliers(id) on delete restrict;
+create index if not exists idx_movements_supplier on public.movements (supplier_id, created_at desc) where supplier_id is not null;
 alter table public.movements add column if not exists card_brand text;
 alter table public.movements add column if not exists discount_value numeric(12,2);
 alter table public.movements add column if not exists fee_percent numeric(6,3);
@@ -761,7 +781,8 @@ begin
   values (
     new.id,
     split_part(new.email, '@', 1) || '-' || substr(new.id::text, 1, 8),
-    coalesce(new.raw_user_meta_data->>'full_name', new.email)
+    -- nome de exibição NUNCA é o e-mail: sem nome informado, usa a parte antes do @ (o admin ajusta em Funcionários)
+    coalesce(nullif(btrim(new.raw_user_meta_data->>'full_name'), ''), initcap(replace(replace(split_part(new.email, '@', 1), '.', ' '), '_', ' ')))
   )
   on conflict (id) do nothing;
   return new;
@@ -800,13 +821,13 @@ begin
   v_before := v_after - v_delta;
 
   if v_delta < 0 then
-    if v_after <= 0 and v_before > 0 then
+    if public.stock_status(v_after, v_item.min_stock) = 'esgotado' and public.stock_status(v_before, v_item.min_stock) <> 'esgotado' then
       perform public.enqueue_notification(
         'OUT_OF_STOCK', 'item', v_item.id::text, 'OUT_OF_STOCK:' || v_item.id || ':' || new.id,
         jsonb_build_object('item_id', v_item.id, 'name', v_item.name, 'sku', v_item.sku,
                            'barcode', v_item.barcode, 'unit', v_item.unit,
                            'quantity', v_after, 'min_stock', v_item.min_stock, 'occurred_at', now()));
-    elsif v_item.min_stock > 0 and v_after <= v_item.min_stock and v_before > v_item.min_stock then
+    elsif public.stock_status(v_after, v_item.min_stock) = 'baixo' and public.stock_status(v_before, v_item.min_stock) = 'ok' then
       perform public.enqueue_notification(
         'LOW_STOCK', 'item', v_item.id::text, 'LOW_STOCK:' || v_item.id || ':' || new.id,
         jsonb_build_object('item_id', v_item.id, 'name', v_item.name, 'sku', v_item.sku,
@@ -1044,7 +1065,7 @@ create or replace function public.create_movement(
   p_reason text default null,
   p_adjustment_increases_stock boolean default null,
   p_serials jsonb default null,
-  p_supplier_id uuid default null    -- só entrada: de quem veio. Uma vez informado, o item "lembra".
+  p_supplier_id uuid default null    -- só entrada: de quem veio. Obrigatório em compra; gravado na movimentação.
 )
 returns jsonb
 language plpgsql
@@ -1095,9 +1116,13 @@ begin
   if p_supplier_id is not null and not exists (select 1 from public.suppliers where id = p_supplier_id) then
     raise exception 'Fornecedor não encontrado.' using errcode = 'P0001', hint = 'SUPPLIER_NOT_FOUND';
   end if;
-  -- "Compra" pede fornecedor uma vez só: se o item já lembra de qual foi, não precisa perguntar de novo.
-  if p_type = 'entrada' and p_subtype = 'compra' and v_item.supplier_id is null and p_supplier_id is null then
+  -- Fornecedor é da NOTA: toda compra grava de quem veio (nada de "o item lembra"). Inventário
+  -- inicial é placeholder de migração, não fornecedor real.
+  if p_type = 'entrada' and p_subtype = 'compra' and p_supplier_id is null then
     raise exception 'Informe o fornecedor dessa compra.' using errcode = 'P0001', hint = 'SUPPLIER_REQUIRED';
+  end if;
+  if p_supplier_id is not null and exists (select 1 from public.suppliers where id = p_supplier_id and is_placeholder) then
+    raise exception 'Esse não é um fornecedor real. Escolha de quem a compra veio.' using errcode = 'P0001', hint = 'SUPPLIER_PLACEHOLDER';
   end if;
 
   v_is_decrease := p_type = 'saida' or (p_type = 'ajuste' and not p_adjustment_increases_stock);
@@ -1149,9 +1174,10 @@ begin
   end if;
 
   insert into public.movements (item_id, type, subtype, quantity, unit_value, reason,
-                                adjustment_increases_stock, source_channel, created_by)
+                                adjustment_increases_stock, source_channel, supplier_id, created_by)
   values (p_item_id, p_type, nullif(p_subtype, ''), v_quantity, p_unit_value, v_reason,
-          case when p_type = 'ajuste' then p_adjustment_increases_stock else null end, 'web', v_uid)
+          case when p_type = 'ajuste' then p_adjustment_increases_stock else null end, 'web',
+          case when p_type = 'entrada' then p_supplier_id else null end, v_uid)
   returning id into v_movement_id;
 
   if v_item.track_serial then
@@ -1165,7 +1191,7 @@ begin
     end if;
   end if;
 
-  -- Lembra o fornecedor pro item: só pergunta de novo se alguém escolher um diferente.
+  -- Guarda o último fornecedor real no produto (atalho de leitura; a verdade está em movements.supplier_id).
   if p_type = 'entrada' and p_supplier_id is not null and p_supplier_id is distinct from v_item.supplier_id then
     update public.items set supplier_id = p_supplier_id, updated_at = now() where id = v_item.id;
   end if;
@@ -1182,15 +1208,26 @@ end;
 $$;
 
 -- ---- 10.0b create_stock_entry -----------------------------------------------------------------
--- Entrada de estoque em LOTE (uma "nota" com vários produtos de uma vez): cada elemento de
--- p_items já chega do cliente AGRUPADO por item+fornecedor (mesmo item + mesmo fornecedor =
--- uma linha só, com a quantidade somada; item diferente ou fornecedor diferente = linha própria).
--- Aqui só processa: chama create_movement() linha a linha, tudo dentro da MESMA transação —
--- se uma linha falhar, nenhuma é gravada.
+-- Entrada de estoque em LOTE (uma "nota" com vários produtos de uma vez). O fornecedor é da NOTA:
+-- p_supplier_id vale para todas as linhas (uma linha pode trazer o seu em supplier_id, como exceção).
+-- Chama create_movement() linha a linha dentro da MESMA transação — se uma linha falhar, nenhuma é gravada.
+-- p_idempotency_key: o clique duplo em "Registrar entrada" reenvia a mesma chave e não grava em dobro.
+create table if not exists public.stock_entry_keys (
+  key        uuid primary key,
+  result     jsonb,
+  created_by uuid not null default auth.uid(),
+  created_at timestamptz not null default now()
+);
+alter table public.stock_entry_keys enable row level security;   -- sem policy: só a função (security definer) acessa
+
+drop function if exists public.create_stock_entry(jsonb, text, text);
+
 create or replace function public.create_stock_entry(
   p_items jsonb,                  -- [{ item_id, quantity?, unit_value?, supplier_id?, serials?, subtype?, reason? }]
   p_subtype text default 'compra',
-  p_reason text default null
+  p_reason text default null,
+  p_supplier_id uuid default null,
+  p_idempotency_key uuid default null
 )
 returns jsonb
 language plpgsql
@@ -1201,6 +1238,9 @@ declare
   v_elem jsonb;
   v_line jsonb;
   v_lines jsonb := '[]'::jsonb;
+  v_supplier uuid;
+  v_inserted integer;
+  v_result jsonb;
 begin
   if not public.is_manager() then
     raise exception 'Apenas gerente, administrador ou CEO podem lançar movimentações de estoque.'
@@ -1213,11 +1253,23 @@ begin
     raise exception 'Máximo de 200 itens por entrada.' using errcode = 'P0001', hint = 'TOO_MANY_ITEMS';
   end if;
 
+  if p_idempotency_key is not null then
+    insert into public.stock_entry_keys (key) values (p_idempotency_key) on conflict (key) do nothing;
+    get diagnostics v_inserted = row_count;
+    if v_inserted = 0 then
+      -- a primeira chamada já commitou (a inserção concorrente espera por ela): devolve o mesmo resultado.
+      select result into v_result from public.stock_entry_keys where key = p_idempotency_key;
+      return coalesce(v_result, '{}'::jsonb) || jsonb_build_object('already_processed', true);
+    end if;
+  end if;
+
   -- ordem estável por item_id: evita deadlock com outra entrada em lote acontecendo ao mesmo tempo.
   for v_elem in select value from jsonb_array_elements(p_items) order by value ->> 'item_id' loop
     if coalesce(v_elem ->> 'item_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
       raise exception 'Produto inválido na entrada.' using errcode = 'P0001', hint = 'INVALID_ITEM';
     end if;
+
+    v_supplier := coalesce(nullif(v_elem ->> 'supplier_id', '')::uuid, p_supplier_id);
 
     v_line := public.create_movement(
       p_type => 'entrada',
@@ -1228,12 +1280,16 @@ begin
       p_reason => coalesce(v_elem ->> 'reason', p_reason),
       p_adjustment_increases_stock => null,
       p_serials => v_elem -> 'serials',
-      p_supplier_id => case when v_elem ->> 'supplier_id' is not null then (v_elem ->> 'supplier_id')::uuid else null end
+      p_supplier_id => v_supplier
     );
     v_lines := v_lines || jsonb_build_object('item_id', v_elem ->> 'item_id', 'movement_id', v_line ->> 'movement_id', 'quantity', v_line -> 'quantity');
   end loop;
 
-  return jsonb_build_object('lines', v_lines, 'count', jsonb_array_length(v_lines));
+  v_result := jsonb_build_object('lines', v_lines, 'count', jsonb_array_length(v_lines));
+  if p_idempotency_key is not null then
+    update public.stock_entry_keys set result = v_result where key = p_idempotency_key;
+  end if;
+  return v_result;
 end;
 $$;
 
@@ -1891,12 +1947,13 @@ as $$
      group by p.method
   ),
   sellers as (
-    select e.full_name as seller, sum(s.total - s.refunded_amount) as revenue, count(*) as sales
+    select coalesce(c.full_name, e.full_name) as seller, sum(s.total - s.refunded_amount) as revenue, count(*) as sales
       from s join public.employees e on e.id = s.seller_id
-     group by e.full_name
+      left join public.employees c on c.id = e.merged_into
+     group by coalesce(c.full_name, e.full_name)
   ),
   daily as (
-    select (s.created_at at time zone 'America/Sao_Paulo')::date as day,
+    select (s.created_at at time zone 'America/Fortaleza')::date as day,
            sum(s.total - s.refunded_amount) as revenue, count(*) as sales
       from s group by 1
   )
@@ -1981,20 +2038,86 @@ as $$
   from agg, total
 $$;
 
--- Estoque baixo: mínimo definido, saldo > 0 e <= mínimo.
--- Esgotado: saldo <= 0 em produto que JÁ teve movimento (produto recém-cadastrado, sem
--- nenhuma entrada, não é "esgotado" — ainda nem foi estocado).
+-- REGRA ÚNICA DE ESTOQUE (Dashboard, Produtos, Reposição, banner e avisos usam só isto):
+--   mínimo 0 (ou vazio)  → nunca alerta ('ok')
+--   saldo <= 0           → 'esgotado'
+--   saldo <  mínimo      → 'baixo'
+--   saldo =  mínimo      → 'baixo' SOMENTE se a configuração low_stock_include_minimum estiver ligada
+-- A tela nunca recalcula isso: ela pergunta ao banco (stock_alerts / stock_alert_rows).
+insert into public.app_settings (key, value, description) values
+  ('low_stock_include_minimum', 'false', 'Alertar estoque baixo também quando o saldo é IGUAL ao mínimo (padrão: só abaixo do mínimo)')
+on conflict (key) do nothing;
+
+create or replace function public.low_stock_includes_minimum()
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select coalesce(public.setting_json('low_stock_include_minimum', 'false'::jsonb) #>> '{}', 'false') in ('true', 't', '1')
+$$;
+
+create or replace function public.stock_status(p_quantity numeric, p_min numeric, p_include_min boolean default null)
+returns text
+language sql stable
+as $$
+  select case
+    when coalesce(p_min, 0) <= 0 then 'ok'
+    when coalesce(p_quantity, 0) <= 0 then 'esgotado'
+    when p_quantity < p_min then 'baixo'
+    when p_quantity = p_min and coalesce(p_include_min, public.low_stock_includes_minimum()) then 'baixo'
+    else 'ok'
+  end
+$$;
+
+-- Produtos ativos que precisam de reposição, com sugestão de compra e o ÚLTIMO fornecedor real.
+--   sugestão = quanto falta para chegar ao mínimo (mínimo − saldo), e pelo menos 1 — todo item
+--   listado precisa de reposição, então nunca aparece sugestão vazia.
+--   fornecedor = da compra mais recente (movements.supplier_id); sem compra registrada cai no
+--   fornecedor guardado no produto; placeholder ("INVENTARIO") nunca conta como fornecedor.
+create or replace function public.stock_alert_rows()
+returns table (
+  id uuid, name text, sku text, unit text, quantity numeric, min_stock numeric,
+  status text, suggestion numeric, supplier_id uuid, supplier_name text
+)
+language sql stable
+as $$
+  with cfg as (select public.low_stock_includes_minimum() as inc),
+  base as (
+    select i.*, public.stock_status(i.quantity, i.min_stock, (select inc from cfg)) as st
+      from public.items i
+     where i.active
+  )
+  select b.id, b.name, b.sku, b.unit, b.quantity, b.min_stock, b.st,
+         greatest(b.min_stock - b.quantity, 1)::numeric,
+         sup.id, sup.name
+    from base b
+    left join lateral (
+      select s.id, s.name
+        from (
+          select (select m.supplier_id from public.movements m
+                   where m.item_id = b.id and m.type = 'entrada' and m.subtype = 'compra' and m.supplier_id is not null
+                     and not exists (select 1 from public.suppliers p where p.id = m.supplier_id and p.is_placeholder)
+                   order by m.created_at desc limit 1) as sid, 0 as pri
+          union all
+          select b.supplier_id, 1
+        ) c
+        join public.suppliers s on s.id = c.sid and not s.is_placeholder
+       order by c.pri
+       limit 1
+    ) sup on true
+   where b.st <> 'ok'
+$$;
+
 create or replace function public.stock_alerts()
 returns jsonb
 language sql stable
 as $$
   select jsonb_build_object(
-    'low', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'name', name, 'sku', sku, 'quantity', quantity, 'min_stock', min_stock, 'unit', unit) order by name)
-                       from public.items where active and min_stock > 0 and quantity > 0 and quantity <= min_stock), '[]'::jsonb),
-    'out', coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'name', i.name, 'sku', i.sku, 'unit', i.unit) order by i.name)
-                       from public.items i
-                      where i.active and i.quantity <= 0
-                        and exists (select 1 from public.movements m where m.item_id = i.id)), '[]'::jsonb)
+    'low', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'name', name, 'sku', sku, 'quantity', quantity,
+                                                         'min_stock', min_stock, 'unit', unit, 'suggestion', suggestion) order by name)
+                       from public.stock_alert_rows() where status = 'baixo'), '[]'::jsonb),
+    'out', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'name', name, 'sku', sku, 'quantity', quantity,
+                                                         'min_stock', min_stock, 'unit', unit, 'suggestion', suggestion) order by name)
+                       from public.stock_alert_rows() where status = 'esgotado'), '[]'::jsonb)
   )
 $$;
 
@@ -2034,8 +2157,8 @@ grant  execute on function public.notification_retry(uuid)                      
 -- Regras de venda e de movimentação: só usuário logado (a função ainda confere perfil por dentro).
 revoke execute on function public.create_movement(text, uuid, numeric, text, numeric, text, boolean, jsonb, uuid) from public, anon;
 grant  execute on function public.create_movement(text, uuid, numeric, text, numeric, text, boolean, jsonb, uuid) to authenticated;
-revoke execute on function public.create_stock_entry(jsonb, text, text) from public, anon;
-grant  execute on function public.create_stock_entry(jsonb, text, text) to authenticated;
+revoke execute on function public.create_stock_entry(jsonb, text, text, uuid, uuid) from public, anon;
+grant  execute on function public.create_stock_entry(jsonb, text, text, uuid, uuid) to authenticated;
 revoke execute on function public.create_sale(uuid, uuid, jsonb, numeric, text, integer, numeric, text, text, jsonb, uuid) from public, anon;
 revoke execute on function public.cancel_sale(uuid, text)                          from public, anon;
 revoke execute on function public.return_sale_items(uuid, jsonb, text, uuid)       from public, anon;
@@ -2051,7 +2174,103 @@ grant  execute on function public.item_sales_ranking()                          
 
 
 -- ============================================================================
--- 13. REALTIME — alerta de estoque baixo em tempo real
+-- 13. CADASTRO DE PRODUTOS: normalização, unicidade e auditoria de saldo
+-- ============================================================================
+
+-- Nome sempre em CAIXA ALTA e sem espaços sobrando; SKU em caixa alta; vazio vira NULL.
+-- Código de barras e SKU são TEXTO: nada de converter para número nem tirar zero à esquerda.
+create or replace function public.items_normalize()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.name := upper(regexp_replace(btrim(coalesce(new.name, '')), '[[:space:]]+', ' ', 'g'));
+  if new.name = '' then
+    raise exception 'Nome do produto é obrigatório.' using errcode = 'P0001', hint = 'NAME_REQUIRED';
+  end if;
+  new.sku := upper(nullif(btrim(new.sku), ''));
+  new.barcode := nullif(btrim(new.barcode), '');
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_items_normalize on public.items;
+create trigger trg_items_normalize
+  before insert or update of name, sku, barcode on public.items
+  for each row execute function public.items_normalize();
+
+-- Unicidade normalizada (sem diferenciar maiúscula/minúscula nem espaços nas pontas).
+-- Se o banco ainda tiver duplicados, o índice não é criado (aviso) — limpe com
+-- supabase/maintenance e rode este arquivo de novo.
+do $$
+begin
+  create unique index if not exists items_sku_norm_key on public.items (upper(btrim(sku))) where sku is not null and btrim(sku) <> '';
+exception when others then
+  raise notice 'items_sku_norm_key não criado (SKU duplicado existente?): %', sqlerrm;
+end $$;
+
+do $$
+begin
+  create unique index if not exists items_barcode_norm_key on public.items (lower(btrim(barcode))) where barcode is not null and btrim(barcode) <> '';
+exception when others then
+  raise notice 'items_barcode_norm_key não criado (código de barras duplicado existente?): %', sqlerrm;
+end $$;
+
+do $$
+begin
+  create unique index if not exists items_name_active_key on public.items (upper(regexp_replace(btrim(name), '[[:space:]]+', ' ', 'g'))) where active;
+exception when others then
+  raise notice 'items_name_active_key não criado (nome duplicado entre produtos ativos?): %', sqlerrm;
+end $$;
+
+-- Nome de exibição de funcionário nunca é um e-mail (apareceria como "vendedor duplicado" nos filtros).
+-- NOT VALID: não reprova registros antigos (corrija em Funcionários), mas barra todo cadastro/edição novo.
+do $$
+begin
+  alter table public.employees
+    add constraint employees_name_not_email check (position('@' in full_name) = 0 and length(btrim(full_name)) >= 2) not valid;
+exception when duplicate_object then null;
+end $$;
+
+-- Auditoria de saldo: saldo do produto x soma do ledger (e, em produto com número de série,
+-- x seriais em estoque). Vazio = tudo bate. Só gerente+ enxerga.
+create or replace function public.stock_integrity_report()
+returns table (item_id uuid, name text, sku text, balance numeric, ledger numeric, serials_in_stock bigint, problem text)
+language sql stable security definer set search_path = public
+as $$
+  with led as (
+    select m.item_id,
+           sum(case m.type
+                 when 'entrada' then m.quantity
+                 when 'saida'   then -m.quantity
+                 else case when m.adjustment_increases_stock then m.quantity else -m.quantity end
+               end) as q
+      from public.movements m
+     group by m.item_id
+  ),
+  ser as (
+    select s.item_id, count(*) filter (where s.status = 'estoque') as n
+      from public.item_serials s
+     group by s.item_id
+  )
+  select i.id, i.name, i.sku, i.quantity, coalesce(l.q, 0), coalesce(s.n, 0),
+         case when i.quantity <> coalesce(l.q, 0) then 'SALDO_DIVERGE_DO_LEDGER' else 'SERIAIS_DIVERGEM_DO_SALDO' end
+    from public.items i
+    left join led l on l.item_id = i.id
+    left join ser s on s.item_id = i.id
+   where public.is_manager()
+     and (i.quantity <> coalesce(l.q, 0) or (i.track_serial and i.quantity <> coalesce(s.n, 0)))
+   order by i.name
+$$;
+
+revoke execute on function public.stock_integrity_report() from public, anon;
+grant  execute on function public.stock_integrity_report() to authenticated;
+grant  execute on function public.stock_alert_rows()       to authenticated;
+grant  execute on function public.stock_status(numeric, numeric, boolean) to authenticated;
+
+
+-- ============================================================================
+-- 14. REALTIME — alerta de estoque baixo em tempo real
 --     (idempotente: o Postgres não tem "add to publication if not exists")
 -- ============================================================================
 do $$

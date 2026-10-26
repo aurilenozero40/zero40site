@@ -36,9 +36,15 @@ const SUBTYPE_LABEL: Record<string, string> = {
 export function MovementsTable({
   movements,
   showItem = true,
+  showSupplier = true,
+  unitLabel = "Valor unit.",
 }: {
   movements: MovementWithRelations[];
   showItem?: boolean;
+  /** coluna de fornecedor (só faz sentido onde há entradas) */
+  showSupplier?: boolean;
+  /** nas entradas o valor unitário é o CUSTO de compra */
+  unitLabel?: string;
 }) {
   return (
     <div className="card overflow-x-auto p-0">
@@ -48,7 +54,9 @@ export function MovementsTable({
             {showItem && <th className="px-4 py-3">Item</th>}
             <th className="px-4 py-3">Tipo</th>
             <th className="px-4 py-3">Quantidade</th>
-            <th className="px-4 py-3">Valor</th>
+            <th className="px-4 py-3 text-right">{unitLabel}</th>
+            <th className="px-4 py-3 text-right">Valor total</th>
+            {showSupplier && <th className="px-4 py-3">Fornecedor</th>}
             <th className="px-4 py-3">Pagamento</th>
             <th className="px-4 py-3">Quem fez</th>
             <th className="px-4 py-3">Quando</th>
@@ -72,9 +80,11 @@ export function MovementsTable({
                 </span>
               </td>
               <td className="px-4 py-3 tabular-nums">{formatQuantity(m.quantity, m.items?.unit)}</td>
-              <td className="px-4 py-3 font-medium tabular-nums text-foreground">
+              <td className="px-4 py-3 text-right tabular-nums text-muted">{formatCurrency(m.unit_value)}</td>
+              <td className="px-4 py-3 text-right font-medium tabular-nums text-foreground">
                 {formatCurrency(m.total_value)}
               </td>
+              {showSupplier && <td className="px-4 py-3 text-muted">{m.suppliers?.name ?? "-"}</td>}
               <td className="px-4 py-3 text-muted">
                 {m.payment_method
                   ? `${PAYMENT_LABEL[m.payment_method]}${
@@ -89,7 +99,7 @@ export function MovementsTable({
           ))}
           {movements.length === 0 && (
             <tr>
-              <td colSpan={showItem ? 8 : 7} className="px-4 py-12 text-center">
+              <td colSpan={(showItem ? 9 : 8) + (showSupplier ? 1 : 0)} className="px-4 py-12 text-center">
                 <div className="flex flex-col items-center gap-2 text-muted">
                   <Inbox size={24} className="opacity-50" />
                   <span className="text-sm">Nenhuma movimentação encontrada.</span>

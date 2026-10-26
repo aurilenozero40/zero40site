@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export default async function NovoItemPage() {
   const { supabase } = await requireManager();
-  const { data: suppliers } = await supabase.from("suppliers").select("*").order("name");
+  const { data: suppliers } = await supabase.from("suppliers").select("*").eq("is_placeholder", false).order("name");
 
   return (
     <div className="flex max-w-2xl flex-col gap-6">

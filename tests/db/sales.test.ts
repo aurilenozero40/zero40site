@@ -30,7 +30,7 @@ describe("create_sale — venda simples (PIX)", () => {
     expect(sale.notes).toBe("cliente pediu embalagem");
 
     const line = await db.one<Record<string, string>>("select * from sale_items where sale_id = $1", [r.sale_id]);
-    expect(line.item_name).toBe("Garmin 55 Preto");
+    expect(line.item_name).toBe("GARMIN 55 PRETO");
     expect(line.item_barcode).toBe("753759279608");
     expect(Number(line.unit_price)).toBe(1500);
     expect(Number(line.unit_cost)).toBe(900); // custo congelado para margem futura
@@ -224,7 +224,7 @@ describe("create_sale — estoque e carrinho", () => {
       message = (e as Error).message;
       expect((e as { hint?: string }).hint).toBe("INSUFFICIENT_STOCK");
     }
-    expect(message).toContain("Estoque insuficiente para Poucas unidades");
+    expect(message).toContain("Estoque insuficiente para POUCAS UNIDADES");
     expect(message).toContain("disponível 2");
     expect(message).toContain("solicitado 3");
     expect(await stockOf(db, item)).toBe(2);

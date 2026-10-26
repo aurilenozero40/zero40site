@@ -3,6 +3,8 @@ import { requireEmployee } from "@/lib/auth/session";
 import { PosScreen } from "@/components/sales/PosScreen";
 import { ratesFromRows } from "@/lib/sales/brands";
 import { isManager } from "@/lib/roles";
+import { NotificationHealthBanner } from "@/components/settings/NotificationHealthBanner";
+import { getNotificationHealth } from "@/lib/notifications/health";
 
 export const dynamic = "force-dynamic";
 
@@ -61,9 +63,13 @@ export default async function NovaVendaPage() {
     })
     .filter((k): k is NonNullable<typeof k> => k !== null);
 
+  // Só quem pode corrigir (gerente+) vê o aviso; a venda nunca depende do Telegram.
+  const health = manager ? await getNotificationHealth(supabase) : null;
+
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-xl font-semibold text-foreground">Nova venda</h1>
+      {health && <NotificationHealthBanner health={health} />}
       <PosScreen
         feeRates={ratesFromRows((rateRows ?? []) as { brand: string; installments: number; fee_percent: number }[])}
         discountLimitPercent={Number(lim.discount_limit_percent)}

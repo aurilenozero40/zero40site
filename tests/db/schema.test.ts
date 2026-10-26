@@ -30,8 +30,9 @@ describe.each(["upgrade", "fresh"] as const)("schema.sql — %s", (template) => 
 
   it("usuário novo entra como vendedor", async () => {
     await db.su.query("insert into auth.users (id, email) values (gen_random_uuid(), 'novo@loja.com')");
-    const novo = await db.one<{ role: string }>("select role from employees where full_name = 'novo@loja.com'");
+    const novo = await db.one<{ role: string; full_name: string }>("select role, full_name from employees where username like 'novo-%'");
     expect(novo.role).toBe("vendedor");
+    expect(novo.full_name).toBe("Novo"); // nome de exibição nunca é o e-mail
   });
 
   it("vende ponta a ponta (venda + estoque + auditoria + evento)", async () => {

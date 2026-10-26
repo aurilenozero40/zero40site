@@ -2,7 +2,7 @@
  * Datas no fuso da loja. O servidor (Vercel) roda em UTC: sem isto, "faturamento de hoje"
  * viraria à meia-noite UTC (21h em Brasília) e venda da noite cairia no dia errado.
  */
-export const STORE_TZ = "America/Sao_Paulo";
+export const STORE_TZ = "America/Fortaleza";
 
 /** Partes de data/hora de `date` no fuso `tz`. */
 function partsIn(date: Date, tz: string) {

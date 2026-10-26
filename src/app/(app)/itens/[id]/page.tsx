@@ -70,10 +70,10 @@ export default async function ItemDetailPage({
     { data: serials },
   ] = await Promise.all([
     supabase.from("items").select("*").eq("id", id).single(),
-    supabase.from("suppliers").select("*").order("name"),
+    supabase.from("suppliers").select("*").eq("is_placeholder", false).order("name"),
     supabase
       .from("movements")
-      .select("*, items(id, name, sku, unit), employees(id, full_name)")
+      .select("*, items(id, name, sku, unit), employees(id, full_name), suppliers(id, name)")
       .eq("item_id", id)
       .order("created_at", { ascending: false })
       .limit(50),

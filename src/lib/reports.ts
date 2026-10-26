@@ -1,4 +1,4 @@
-import { monthRange, todayParts } from "./dates";
+import { monthRange, STORE_TZ, todayParts } from "./dates";
 
 /** "YYYY-MM" do mês atual NO FUSO DA LOJA (o servidor roda em UTC). */
 export function currentMonthParam() {
@@ -41,7 +41,7 @@ export function groupByDay<T extends { created_at: string; quantity: number; tot
   rows: T[]
 ) {
   const byDay = new Map<string, { day: string; quantity: number; value: number }>();
-  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" });
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: STORE_TZ, year: "numeric", month: "2-digit", day: "2-digit" });
 
   for (const row of rows) {
     const day = fmt.format(new Date(row.created_at)); // YYYY-MM-DD

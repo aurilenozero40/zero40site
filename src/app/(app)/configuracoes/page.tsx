@@ -1,5 +1,7 @@
 import { CheckCircle2, XCircle } from "lucide-react";
 import { requireAdmin } from "@/lib/auth/session";
+import { NotificationHealthBanner } from "@/components/settings/NotificationHealthBanner";
+import { getNotificationHealth } from "@/lib/notifications/health";
 import { NotificationTools, RetryButton } from "@/components/settings/NotificationTools";
 import { SettingsForm } from "@/components/settings/SettingsForm";
 import { BRAND_ORDER, brandLabel, ratesFromRows } from "@/lib/sales/brands";
@@ -35,20 +37,17 @@ export default async function ConfiguracoesPage() {
   const brands = BRAND_ORDER.filter((b) => rates[b]);
   const keys = Array.from({ length: 19 }, (_, i) => i);
 
-  const hasToken = Boolean(process.env.TELEGRAM_BOT_TOKEN);
-  const { count: recipientCount } = await supabase
-    .from("employees")
-    .select("id", { count: "exact", head: true })
-    .eq("active", true)
-    .in("role", ["ceo", "admin", "gerente"])
-    .not("telegram_chat_id", "is", null);
-  const hasChat = Boolean(recipientCount && recipientCount > 0);
+  const health = await getNotificationHealth(supabase);
+  const hasToken = health.hasToken;
+  const hasChat = health.recipients > 0;
   const rows = (outbox as unknown as (OutboxRow & { entity_type: string })[]) ?? [];
   const failed = rows.filter((r) => r.status === "failed").length;
 
   return (
     <div className="flex max-w-4xl flex-col gap-6">
       <h1 className="text-xl font-semibold text-foreground">Configurações</h1>
+
+      <NotificationHealthBanner health={health} showLink={false} />
 
       <div className="card flex flex-col gap-4">
         <div className="flex items-start justify-between gap-3">
@@ -84,6 +83,7 @@ export default async function ConfiguracoesPage() {
         discountManager={Number(setting("discount_limit_percent_gerente", 100))}
         maxInterest={Number(setting("max_interest_percent", 50))}
         enabledEvents={(setting("notify_events", []) as string[]) ?? []}
+        lowStockIncludeMinimum={setting("low_stock_include_minimum", false) === true}
       />
 
       <div className="flex flex-col gap-3">

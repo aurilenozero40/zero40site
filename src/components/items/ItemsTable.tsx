@@ -3,8 +3,8 @@ import type { Item } from "@/lib/types";
 import { formatCurrency, formatQuantity } from "@/lib/utils";
 import { LowStockBadge } from "./LowStockBadge";
 
-/** Estoque baixo: mínimo definido e saldo <= mínimo (mesma regra do banco). */
-export const isLowStock = (item: Pick<Item, "quantity" | "min_stock">) => item.min_stock > 0 && item.quantity <= item.min_stock;
+/** Produto com o fornecedor da última compra (placeholder "INVENTARIO" não conta). */
+export type ItemRow = Item & { suppliers?: { id: string; name: string; is_placeholder: boolean } | null };
 
 const ABC_CLASS: Record<"A" | "B" | "C", string> = {
   A: "bg-success/10 text-success",
@@ -17,15 +17,18 @@ export function ItemsTable({
   showCost,
   salesShare,
   abcClass,
+  stockStatus,
 }: {
-  items: Item[];
+  items: ItemRow[];
+  /** status de estoque por produto, vindo de stock_alerts() — a tela nunca recalcula a regra. */
+  stockStatus?: Map<string, "baixo" | "esgotado">;
   showCost: boolean;
   /** % de participação nas vendas (id do item → %), só pra quem pode ver (gerente+). */
   salesShare?: Map<string, number>;
   /** classe ABC (curva de Pareto do faturamento) — A = carro-chefe, C = cauda longa. */
   abcClass?: Map<string, "A" | "B" | "C">;
 }) {
-  const colCount = 7 + (showCost ? 2 : 0) + (salesShare ? 1 : 0);
+  const colCount = 7 + (showCost ? 3 : 0) + (salesShare ? 1 : 0);
   return (
     <div className="card overflow-x-auto p-0">
       <table className="w-full text-sm">
@@ -37,6 +40,7 @@ export function ItemsTable({
             <th className="px-4 py-3 text-right">Preço</th>
             {showCost && <th className="px-4 py-3 text-right">Custo</th>}
             {showCost && <th className="px-4 py-3 text-right">Margem</th>}
+            {showCost && <th className="px-4 py-3">Fornecedor</th>}
             <th className="px-4 py-3 text-right">Estoque</th>
             <th className="px-4 py-3 text-right">Mínimo</th>
             {salesShare && <th className="px-4 py-3 text-right">% vendas</th>}
@@ -45,7 +49,7 @@ export function ItemsTable({
         </thead>
         <tbody>
           {items.map((item) => {
-            const low = isLowStock(item);
+            const status = stockStatus?.get(item.id);
             const share = salesShare?.get(item.id) ?? 0;
             const margin =
               item.sale_price !== null && item.sale_price > 0 && item.cost_price !== null
@@ -85,6 +89,7 @@ export function ItemsTable({
                     {margin === null ? "—" : `${margin.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`}
                   </td>
                 )}
+                {showCost && <td className="px-4 py-3 text-muted">{item.suppliers && !item.suppliers.is_placeholder ? item.suppliers.name : "—"}</td>}
                 <td className={`px-4 py-3 text-right tabular-nums ${item.quantity <= 0 ? "text-danger" : ""}`}>{formatQuantity(item.quantity, item.unit)}</td>
                 <td className="px-4 py-3 text-right tabular-nums text-muted">{formatQuantity(item.min_stock, item.unit)}</td>
                 {salesShare && (
@@ -92,7 +97,7 @@ export function ItemsTable({
                     {share > 0 ? `${share.toLocaleString("pt-BR")}%` : "—"}
                   </td>
                 )}
-                <td className="px-4 py-3">{low && <LowStockBadge />}</td>
+                <td className="px-4 py-3">{status && <LowStockBadge status={status} />}</td>
               </tr>
             );
           })}

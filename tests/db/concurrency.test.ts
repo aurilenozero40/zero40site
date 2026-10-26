@@ -19,7 +19,7 @@ const failure = (r: PromiseSettledResult<unknown>) => (r.status === "rejected" ?
 
 describe("vendas simultâneas", () => {
   it("estoque = 1 e dois vendedores ao mesmo tempo: só UM consegue vender", async () => {
-    const item = await addItem(db, { name: "Última peça", price: 100, stock: 1 });
+    const item = await addItem(db, { name: "Última peça", price: 100, stock: 1, min: 1 });
     const results = await Promise.allSettled([
       sell(db, ids.seller, { items: [{ item_id: item, quantity: 1 }] }),
       sell(db, ids.seller2, { items: [{ item_id: item, quantity: 1 }] }),

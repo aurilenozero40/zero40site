@@ -73,6 +73,8 @@ export type Supplier = {
   cnpj: string | null;
   phone: string | null;
   email: string | null;
+  /** valor de migração ("INVENTARIO"): existe no histórico, mas não é fornecedor real. */
+  is_placeholder: boolean;
   created_at: string;
 };
 
@@ -126,6 +128,8 @@ export type Movement = {
   reason: string | null;
   source_channel: "web" | "telegram";
   sale_id: string | null;
+  /** de quem veio a entrada (compra); vazio em movimentações antigas. */
+  supplier_id: string | null;
   created_by: string;
   created_at: string;
 };
@@ -133,6 +137,7 @@ export type Movement = {
 export type MovementWithRelations = Movement & {
   items: Pick<Item, "id" | "name" | "sku" | "unit"> | null;
   employees: Pick<Employee, "id" | "full_name"> | null;
+  suppliers?: Pick<Supplier, "id" | "name"> | null;
 };
 
 // ---- Vendas ---------------------------------------------------------------------------
@@ -228,6 +233,25 @@ export type ItemSalesRankingRow = {
 };
 
 export type StockAlerts = {
-  low: { id: string; name: string; sku: string | null; quantity: number; min_stock: number; unit: string }[];
-  out: { id: string; name: string; sku: string | null; unit: string }[];
+  low: StockAlertItem[];
+  out: StockAlertItem[];
+};
+
+/** Item que precisa de reposição, como devolvido por stock_alerts() — a regra mora no banco. */
+export type StockAlertItem = {
+  id: string;
+  name: string;
+  sku: string | null;
+  quantity: number;
+  min_stock: number;
+  unit: string;
+  /** quanto comprar: mínimo − saldo, no mínimo 1. */
+  suggestion: number;
+};
+
+/** Linha de stock_alert_rows(): igual à de cima, com status e último fornecedor real. */
+export type StockAlertRow = StockAlertItem & {
+  status: "baixo" | "esgotado";
+  supplier_id: string | null;
+  supplier_name: string | null;
 };

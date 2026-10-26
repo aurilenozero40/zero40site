@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { requireAdmin } from "@/lib/auth/session";
+import { EmployeeNameForm } from "@/components/employees/EmployeeNameForm";
 import { EmployeeRoleForm } from "@/components/employees/EmployeeRoleForm";
 import { EmployeeTelegramForm } from "@/components/employees/EmployeeTelegramForm";
 import type { Employee } from "@/lib/types";
@@ -45,8 +46,7 @@ export default async function FuncionariosPage() {
               return (
                 <tr key={emp.id} className="border-b border-border last:border-0">
                   <td className="px-4 py-3 font-medium text-foreground">
-                    {emp.full_name}
-                    {isMe && <span className="ml-2 text-xs font-normal text-muted">(você)</span>}
+                    <EmployeeNameForm employeeId={emp.id} name={emp.full_name} isMe={isMe} />
                   </td>
                   <td className="px-4 py-3">
                     <EmployeeRoleForm employeeId={emp.id} role={emp.role} />
