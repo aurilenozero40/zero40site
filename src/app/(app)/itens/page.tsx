@@ -5,7 +5,7 @@ import { isManager } from "@/lib/roles";
 import { ItemsTable } from "@/components/items/ItemsTable";
 import { Pagination, parsePage } from "@/components/ui/pagination";
 import { escapeLike } from "@/lib/utils";
-import type { Item } from "@/lib/types";
+import type { ItemRow } from "@/components/items/ItemsTable";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +35,7 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
   const { data: categoryRows } = await supabase.from("items").select("category").not("category", "is", null).order("category");
   const categories = [...new Set((categoryRows ?? []).map((r) => r.category as string).filter(Boolean))];
 
-  let query = supabase.from("items").select("*", { count: "exact" }).order("name");
+  let query = supabase.from("items").select("*, suppliers(id, name, is_placeholder)", { count: "exact" }).order("name");
 
   if (!showInactive) query = query.eq("active", true);
   if (onlyUsed) query = query.eq("condition", "seminovo");
@@ -47,10 +47,15 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
     query = query.or(`name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,category.ilike.%${term}%,manufacturer.ilike.%${term}%`);
   }
 
+  // Regra única (baixo = abaixo do mínimo · esgotado = 0 · mínimo 0 nunca alerta) vive no banco:
+  // filtro, selo da tabela, Dashboard e Reposição leem a mesma função.
+  const { data: alerts } = await supabase.rpc("stock_alerts");
+  const stockStatus = new Map<string, "baixo" | "esgotado">();
+  for (const i of (alerts?.low ?? []) as { id: string }[]) stockStatus.set(i.id, "baixo");
+  for (const i of (alerts?.out ?? []) as { id: string }[]) stockStatus.set(i.id, "esgotado");
+
   if (onlyLow) {
-    // coluna vs coluna (quantity <= min_stock) não existe no filtro da API: usa a regra do banco
-    const { data: alerts } = await supabase.rpc("stock_alerts");
-    const ids = [...(alerts?.low ?? []), ...(alerts?.out ?? [])].map((i: { id: string }) => i.id);
+    const ids = [...stockStatus.keys()];
     query = ids.length > 0 ? query.in("id", ids) : query.eq("id", "00000000-0000-0000-0000-000000000000");
   }
 
@@ -126,7 +131,7 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
         </div>
       </form>
 
-      <ItemsTable items={(items as Item[]) ?? []} showCost={manager} salesShare={manager ? salesShare : undefined} abcClass={manager ? abcClass : undefined} />
+      <ItemsTable items={(items as ItemRow[]) ?? []} stockStatus={stockStatus} showCost={manager} salesShare={manager ? salesShare : undefined} abcClass={manager ? abcClass : undefined} />
       <Pagination
         page={page}
         pageSize={PAGE_SIZE}

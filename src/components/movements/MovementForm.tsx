@@ -4,7 +4,7 @@ import { useActionState, useEffect, useMemo, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { ScanBarcode, X } from "lucide-react";
 import { cn, formatQuantity } from "@/lib/utils";
-import { normalizeBarcode } from "@/lib/barcode";
+import { findItemByCode, normalizeCode } from "@/lib/barcode";
 import { listAvailableSerialsAction } from "@/app/(app)/movimentacoes/actions";
 import type { Item } from "@/lib/types";
 import type { ActionState } from "@/app/(app)/movimentacoes/actions";
@@ -85,10 +85,10 @@ export function MovementForm({
     Number(ajusteQuantity) > selectedItem.quantity;
 
   function handleBarcodeScan() {
-    const normalized = normalizeBarcode(barcodeInput);
-    if (!normalized) return;
+    if (!normalizeCode(barcodeInput)) return;
 
-    const found = items.find((i) => normalizeBarcode(i.barcode) === normalized);
+    const match = findItemByCode(items, barcodeInput);
+    const found = match.kind === "exact" || match.kind === "similar" ? match.item : match.kind === "names" && match.items.length === 1 ? match.items[0] : null;
     if (!found) {
       setScanStatus({
         ok: false,
@@ -159,7 +159,7 @@ export function MovementForm({
             <input
               id="barcode_scan"
               type="text"
-              inputMode="numeric"
+              inputMode="text"
               autoComplete="off"
               autoFocus={!defaultItemId}
               placeholder="Bipe o código ou digite e aperte Enter"

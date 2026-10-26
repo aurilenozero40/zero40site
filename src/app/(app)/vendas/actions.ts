@@ -3,7 +3,7 @@
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { requireEmployee } from "@/lib/auth/session";
-import { normalizeBarcode } from "@/lib/barcode";
+import { normalizeCode } from "@/lib/barcode";
 import { processNotifications } from "@/lib/notifications";
 import { friendlyRpcError } from "@/lib/sales/errors";
 import { cancelSaleSchema, customerSchema, returnSaleSchema, saleInputSchema } from "@/lib/validations";
@@ -62,7 +62,9 @@ export async function searchProductsAction(rawQuery: string): Promise<ProductHit
   // evita que texto livre do usuário vire parte da sintaxe do filtro `in`.
   const looksLikeCode = /^[\w.-]+$/.test(q);
   // leitor pode entregar UPC-A (12) como EAN-13 (com 0 na frente) e vice-versa
-  const barcodeVariants = digits ? [...new Set([q, normalizeBarcode(q), "0" + normalizeBarcode(q)])] : [q];
+  // (só para ENCONTRAR: o código gravado nunca perde o zero à esquerda)
+  const stripped = normalizeCode(q).replace(/^0+/, "");
+  const barcodeVariants = digits ? [...new Set([q, stripped, "0" + stripped])] : [q];
 
   const [byBarcode, bySku, byName] = await Promise.all([
     looksLikeCode

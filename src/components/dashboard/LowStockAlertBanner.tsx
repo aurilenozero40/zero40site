@@ -10,10 +10,6 @@ import type { StockAlerts } from "@/lib/types";
 
 type LowStockItem = StockAlerts["low"][number];
 
-/** Estoque baixo = mínimo definido e saldo <= mínimo (mesma regra do banco e do Telegram). */
-const isLow = (i: { active?: boolean; quantity: number; min_stock: number }) =>
-  i.active !== false && Number(i.min_stock) > 0 && Number(i.quantity) > 0 && Number(i.quantity) <= Number(i.min_stock);
-
 export function LowStockAlertBanner() {
   const [lowItems, setLowItems] = useState<LowStockItem[] | null>(null);
   const known = useRef<Set<string>>(new Set());
@@ -23,44 +19,42 @@ export function LowStockAlertBanner() {
     const supabase = createClient();
     let active = true;
 
-    async function loadInitial() {
-      // O banco já devolve só o que está baixo (nada de baixar todos os produtos).
+    // A regra (abaixo do mínimo, mínimo 0 nunca alerta…) mora SÓ no banco: a tela pergunta de novo
+    // a cada mudança de produto em vez de recalcular por conta própria.
+    async function load(notify: boolean) {
       const { data } = await supabase.rpc("stock_alerts");
       if (!active || !data) return;
       const low = (data as StockAlerts).low;
+      if (notify) {
+        // avisa só na virada (não a cada movimentação enquanto continua baixo)
+        for (const item of low) {
+          if (!known.current.has(item.id)) {
+            toast({
+              title: "Estoque baixo",
+              description: `${item.name}: ${formatQuantity(Number(item.quantity), item.unit)} (mínimo ${formatQuantity(Number(item.min_stock), item.unit)})`,
+              variant: "destructive",
+            });
+          }
+        }
+      }
       known.current = new Set(low.map((i) => i.id));
       setLowItems(low);
     }
 
-    loadInitial();
+    void load(false);
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const channel = supabase
       .channel("items-low-stock")
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "items" }, (payload) => {
-        const item = payload.new as LowStockItem & { active: boolean };
-        const nowLow = isLow(item);
-        const wasLow = known.current.has(item.id);
-
-        setLowItems((prev) => {
-          const withoutItem = (prev ?? []).filter((i) => i.id !== item.id);
-          return nowLow ? [...withoutItem, item].sort((a, b) => a.name.localeCompare(b.name)) : withoutItem;
-        });
-        if (nowLow) known.current.add(item.id);
-        else known.current.delete(item.id);
-
-        // avisa só na virada (não a cada movimentação enquanto continua baixo)
-        if (nowLow && !wasLow) {
-          toast({
-            title: "Estoque baixo",
-            description: `${item.name} está no mínimo (${formatQuantity(Number(item.quantity), item.unit)})`,
-            variant: "destructive",
-          });
-        }
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "items" }, () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => void load(true), 400);
       })
       .subscribe();
 
     return () => {
       active = false;
+      clearTimeout(timer);
       supabase.removeChannel(channel);
     };
   }, [toast]);
@@ -89,7 +83,7 @@ export function LowStockAlertBanner() {
               {item.name}
             </Link>
             <span className="tabular-nums text-muted">
-              {formatQuantity(Number(item.quantity), item.unit)} / mín. {formatQuantity(Number(item.min_stock), item.unit)}
+              {formatQuantity(Number(item.quantity), item.unit)} / mín. {formatQuantity(Number(item.min_stock), item.unit)} · comprar {formatQuantity(Number(item.suggestion), item.unit)}
             </span>
           </li>
         ))}

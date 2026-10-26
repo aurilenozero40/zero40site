@@ -1,10 +1,22 @@
 import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-const PORT = 54998;
+let PORT = 54998;
+
+/** Porta livre: um Postgres de teste esquecido por uma execução interrompida não trava a próxima. */
+const freePort = () =>
+  new Promise<number>((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const { port } = srv.address() as net.AddressInfo;
+      srv.close(() => resolve(port));
+    });
+  });
 const root = path.resolve(__dirname, "..", "..");
 const read = (...p: string[]) => fs.readFileSync(path.join(root, ...p), "utf8");
 
@@ -19,6 +31,7 @@ const read = (...p: string[]) => fs.readFileSync(path.join(root, ...p), "utf8");
  * Cada arquivo de teste clona um deles em milissegundos.
  */
 export default async function setup() {
+  PORT = await freePort();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "estoque-pg-"));
   const server = new EmbeddedPostgres({
     databaseDir: dir,

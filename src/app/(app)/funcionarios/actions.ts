@@ -61,3 +61,22 @@ export async function toggleEmployeeActive(employeeId: string, active: boolean) 
   if (error) throw new Error(error.message);
   revalidatePath("/funcionarios");
 }
+
+/** Corrige o nome de exibição (o do e-mail vira "vendedor duplicado" nos filtros). Só admin/ceo; o banco também confere. */
+export async function updateEmployeeName(
+  employeeId: string,
+  _prev: EmployeeActionState,
+  formData: FormData
+): Promise<EmployeeActionState> {
+  const { supabase } = await requireAdminAction();
+  const name = String(formData.get("full_name") ?? "").replace(/\s+/g, " ").trim();
+  if (name.length < 2) return { error: "Informe o nome da pessoa." };
+  if (name.includes("@")) return { error: "O nome não pode ser um e-mail." };
+
+  const { error } = await supabase.from("employees").update({ full_name: name }).eq("id", employeeId);
+  if (error) return { error: error.code === "42501" ? "Sem permissão." : error.code === "23514" ? "Nome inválido." : error.message };
+
+  revalidatePath("/funcionarios");
+  revalidatePath("/vendas");
+  return { ok: true };
+}

@@ -196,7 +196,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                   ))}
                 </ul>
               )}
-              <p className="text-xs text-muted">Produtos recém-cadastrados, ainda sem nenhuma entrada, não contam como esgotados.</p>
+              <p className="text-xs text-muted">Esgotado = saldo 0 em produto com estoque mínimo definido. Produto com mínimo 0 nunca alerta.</p>
             </div>
           </div>
         )}

@@ -67,7 +67,7 @@ export default async function RelatorioSaidasPage({
         <p className="text-sm text-warning">Período com muitos registros: exibindo os 20.000 mais recentes.</p>
       )}
       <MonthlyMovementsChart data={chartData} />
-      <MovementsTable movements={movements} />
+      <MovementsTable movements={movements} showSupplier={false} />
     </div>
   );
 }

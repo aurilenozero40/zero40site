@@ -46,6 +46,13 @@ export default async function VendasPage({ searchParams }: { searchParams: Promi
   const metodo = p.metodo && (PAYMENT_METHODS as readonly string[]).includes(p.metodo) ? p.metodo : "";
   const vendedor = manager && /^[0-9a-f-]{36}$/i.test(p.vendedor ?? "") ? p.vendedor! : "";
 
+  // 1 pessoa = 1 vendedor: filtrar pela conta principal inclui as vendas das contas duplicadas ligadas a ela
+  let sellerIds: string[] = [];
+  if (vendedor) {
+    const { data: merged } = await supabase.from("employees").select("id").eq("merged_into", vendedor);
+    sellerIds = [vendedor, ...((merged ?? []) as { id: string }[]).map((m) => m.id)];
+  }
+
   const paymentsEmbed = `sale_payments${metodo ? "!inner" : ""}(method, installments, card_brand)`;
   let query = supabase
     .from("sales")
@@ -57,7 +64,7 @@ export default async function VendasPage({ searchParams }: { searchParams: Promi
 
   if (status) query = query.eq("status", status);
   if (metodo) query = query.eq("sale_payments.method", metodo);
-  if (vendedor) query = query.eq("seller_id", vendedor);
+  if (vendedor) query = query.in("seller_id", sellerIds);
   if (p.de && p.ate) {
     const range = resolvePeriod("custom", { from: p.de, to: p.ate });
     query = query.gte("created_at", range.from.toISOString()).lt("created_at", range.to.toISOString());
@@ -83,7 +90,7 @@ export default async function VendasPage({ searchParams }: { searchParams: Promi
 
   const [{ data: sales, count, error }, { data: employees }] = await Promise.all([
     query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1),
-    manager ? supabase.from("employees").select("id, full_name").order("full_name") : Promise.resolve({ data: [] as { id: string; full_name: string }[] }),
+    manager ? supabase.from("employees").select("id, full_name").is("merged_into", null).order("full_name") : Promise.resolve({ data: [] as { id: string; full_name: string }[] }),
   ]);
   if (error) console.error(`[vendas] erro: code=${error.code} message=${error.message}`);
 

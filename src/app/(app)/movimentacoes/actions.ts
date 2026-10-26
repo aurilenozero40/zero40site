@@ -49,6 +49,9 @@ export async function createSupplierQuickAction(name: string): Promise<ActionSta
   }
   const trimmed = name.trim();
   if (!trimmed) return { error: "Informe o nome do fornecedor." };
+  if (/^(invent[aá]rio|sem fornecedor)/i.test(trimmed)) {
+    return { error: "Esse nome é reservado ao inventário inicial. Informe o fornecedor real." };
+  }
 
   const { data, error } = await supabase.from("suppliers").insert({ name: trimmed }).select("id, name").single();
   if (error) {
@@ -65,19 +68,24 @@ export interface StockEntryLine {
   itemId: string;
   quantity?: number;
   unitValue?: number | null;
-  supplierId?: string | null;
   serials?: string[];
 }
 
+const ENTRY_SUBTYPES = ["compra", "devolucao", "transferencia", "outros"];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
- * Entrada de estoque em LOTE (uma nota com vários produtos de uma vez). Cada linha já chega
- * agrupada por item+fornecedor (a tela faz isso); o banco processa tudo numa transação só.
+ * Entrada de estoque em LOTE (uma nota com vários produtos de uma vez). O fornecedor é da NOTA
+ * (vale para todas as linhas) e a chave de idempotência impede registrar a mesma nota duas vezes
+ * (clique duplo, reenvio). O banco processa tudo numa transação só.
  */
 export async function createStockEntryAction(input: {
   subtype: string;
   reason?: string | null;
+  supplierId?: string | null;
+  idempotencyKey?: string | null;
   items: StockEntryLine[];
-}): Promise<StockEntryResult<{ count: number }>> {
+}): Promise<StockEntryResult<{ count: number; alreadyProcessed: boolean }>> {
   const { supabase, employee } = await requireEmployee();
   if (!isManager(employee.role)) {
     return { ok: false, error: "Apenas gerente, administrador ou CEO podem lançar entradas de estoque." };
@@ -85,17 +93,30 @@ export async function createStockEntryAction(input: {
   if (!input.items || input.items.length === 0) {
     return { ok: false, error: "Adicione ao menos um item à entrada." };
   }
+  if (!ENTRY_SUBTYPES.includes(input.subtype)) {
+    return { ok: false, error: "Motivo da entrada inválido." };
+  }
+  if (input.supplierId && !UUID_RE.test(input.supplierId)) {
+    return { ok: false, error: "Fornecedor inválido." };
+  }
+  if (input.subtype === "compra" && !input.supplierId) {
+    return { ok: false, error: "Informe o fornecedor da nota (obrigatório em compra)." };
+  }
+  if (input.idempotencyKey && !UUID_RE.test(input.idempotencyKey)) {
+    return { ok: false, error: "Chave da entrada inválida. Recarregue a página e tente de novo." };
+  }
 
   const { data, error } = await supabase.rpc("create_stock_entry", {
     p_items: input.items.map((i) => ({
       item_id: i.itemId,
       quantity: i.quantity ?? null,
       unit_value: i.unitValue ?? null,
-      supplier_id: i.supplierId ?? null,
       serials: i.serials && i.serials.length > 0 ? i.serials : undefined,
     })),
     p_subtype: input.subtype,
     p_reason: input.reason ?? null,
+    p_supplier_id: input.supplierId || null,
+    p_idempotency_key: input.idempotencyKey || null,
   });
 
   if (error) {
@@ -110,7 +131,9 @@ export async function createStockEntryAction(input: {
     await processNotifications();
   });
 
-  return { ok: true, data: { count: (data as { count: number }).count } };
+  revalidatePath("/relatorios/reposicao");
+  const result = data as { count?: number; already_processed?: boolean };
+  return { ok: true, data: { count: result.count ?? input.items.length, alreadyProcessed: result.already_processed === true } };
 }
 
 /** Números de série ainda em estoque de um item (para saída/ajuste: escolher quais unidades saem). */

@@ -36,6 +36,9 @@ export type ActionState = { error?: string; ok?: string; warning?: string; reset
 // Traduz os erros crus do Postgres que o usuário realmente consegue causar.
 function friendlyItemError(error: { message: string; code?: string }) {
   if (error.code === "23505" || error.message.includes("duplicate key")) {
+    if (error.message.includes("items_name_active_key")) {
+      return "Já existe um produto ativo com esse nome. Use o que já está cadastrado (ou desative o duplicado).";
+    }
     if (error.message.includes("barcode")) {
       return "Já existe outro item com esse código de barras. Cada produto precisa ter um código diferente.";
     }
@@ -43,6 +46,7 @@ function friendlyItemError(error: { message: string; code?: string }) {
       return "Já existe outro item com esse SKU. Cada produto precisa ter um SKU diferente.";
     }
   }
+  if ((error as { hint?: string }).hint === "NAME_REQUIRED") return "Nome é obrigatório.";
   if (error.code === "42501") {
     return "Você não tem permissão para cadastrar ou alterar produtos.";
   }
@@ -123,7 +127,7 @@ export async function createItemQuickAction(input: {
     .from("items")
     .insert({
       name,
-      sku: input.sku?.trim() || null,
+      sku: input.sku?.trim() || null, // texto: o banco normaliza (caixa alta, sem espaços); zero à esquerda é preservado
       barcode: input.barcode?.trim() || null,
       sale_price: input.salePrice ?? null,
       track_serial: input.trackSerial ?? false,

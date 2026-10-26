@@ -9,11 +9,13 @@ export function SettingsForm({
   discountManager,
   maxInterest,
   enabledEvents,
+  lowStockIncludeMinimum,
 }: {
   discountSeller: number;
   discountManager: number;
   maxInterest: number;
   enabledEvents: string[];
+  lowStockIncludeMinimum: boolean;
 }) {
   const [state, formAction, pending] = useActionState<SettingsState, FormData>(saveSettings, null);
 
@@ -43,6 +45,17 @@ export function SettingsForm({
           </div>
         </div>
         <p className="text-xs text-muted">Admin e CEO não têm limite de desconto além do valor da venda. O banco confere esses limites em toda venda.</p>
+      </div>
+
+      <div className="card flex flex-col gap-3">
+        <h2 className="text-sm font-semibold text-foreground">Regra de estoque baixo</h2>
+        <p className="text-sm text-foreground">
+          <strong>Baixo</strong> = saldo abaixo do mínimo · <strong>Esgotado</strong> = saldo 0 · produto com mínimo 0 nunca alerta. Vale igual no Dashboard, em Produtos e na Reposição.
+        </p>
+        <label className="flex items-center gap-2 text-sm text-foreground">
+          <input type="checkbox" name="low_stock_include_minimum" defaultChecked={lowStockIncludeMinimum} />
+          Também alertar quando o saldo for IGUAL ao mínimo
+        </label>
       </div>
 
       <div className="card flex flex-col gap-3">
