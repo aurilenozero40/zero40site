@@ -3,7 +3,7 @@ import type { Item } from "@/lib/types";
 import { formatCurrency, formatQuantity } from "@/lib/utils";
 import { LowStockBadge } from "./LowStockBadge";
 
-/** Produto com o fornecedor da última compra (placeholder "INVENTARIO" não conta). */
+/** Produto com o fornecedor/origem da última entrada. */
 export type ItemRow = Item & { suppliers?: { id: string; name: string; is_placeholder: boolean } | null };
 
 const ABC_CLASS: Record<"A" | "B" | "C", string> = {

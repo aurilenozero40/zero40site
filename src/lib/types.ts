@@ -73,7 +73,7 @@ export type Supplier = {
   cnpj: string | null;
   phone: string | null;
   email: string | null;
-  /** valor de migração ("INVENTARIO"): existe no histórico, mas não é fornecedor real. */
+  /** origem que não é fornecedor de verdade (marcada à mão); "INVENTARIO" (estoque em casa) é válido. */
   is_placeholder: boolean;
   created_at: string;
 };

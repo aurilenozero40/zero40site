@@ -5,7 +5,7 @@ import { addItem, createTestDb, hintOf, ids, type TestDb } from "./helpers";
 /**
  * Fornecedor é uma informação da NOTA (e fica gravado na movimentação de entrada):
  * "Compra" exige fornecedor sempre; devolução/transferência/outros não. O fornecedor
- * placeholder do inventário inicial ("INVENTARIO") nunca vale como fornecedor real.
+ * placeholder (is_placeholder, marcado à mão) nunca vale como fornecedor real; "INVENTARIO" (estoque em casa) vale.
  */
 let db: TestDb;
 beforeAll(async () => {
@@ -41,17 +41,14 @@ describe("seed de fornecedores", () => {
     expect(rows.map((r) => r.name).sort()).toEqual(["EUA", "EUROPA", "PRG", "SP"]);
   });
 
-  it("INVENTARIO (com ou sem acento) é marcado como placeholder, não como fornecedor real", async () => {
+  it("INVENTARIO (estoque em casa) é uma origem VÁLIDA: o schema nunca o marca como placeholder e a compra aceita", async () => {
     const d = await createTestDb("upgrade");
-    await d.q("insert into suppliers (name) values ('INVENTARIO'), ('Inventário inicial')");
-    // o schema.sql roda de novo em produção a cada atualização: a marcação é idempotente
-    await d.q(
-      `update suppliers set is_placeholder = true
-        where not is_placeholder and upper(translate(btrim(name), 'ÍÁÉÓÚíáéóú', 'IAEOUiaeou')) in ('INVENTARIO', 'INVENTARIO INICIAL', 'SEM FORNECEDOR')`
-    );
-    const rows = await d.q<{ name: string; is_placeholder: boolean }>("select name, is_placeholder from suppliers where name ilike 'invent%' order by name");
-    expect(rows).toHaveLength(2);
-    expect(rows.every((r) => r.is_placeholder)).toBe(true);
+    const inv = await d.one<{ id: string; is_placeholder: boolean }>("insert into suppliers (name) values ('INVENTARIO') returning id, is_placeholder");
+    expect(inv.is_placeholder).toBe(false);
+    const item = await addItem(d, { name: "Estoque em casa" });
+    await d.asUser(ids.manager, (c) => c.query("select public.create_movement('entrada', $1, 1, 'compra', null, null, null, null, $2)", [item, inv.id]));
+    const m = await d.one<{ supplier_id: string }>("select supplier_id from movements where item_id = $1 and subtype = 'compra'", [item]);
+    expect(m.supplier_id).toBe(inv.id);
     await d.close();
   });
 });

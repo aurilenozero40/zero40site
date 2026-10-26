@@ -34,7 +34,7 @@
 --   • O evento de notificação nasce na MESMA transação da venda (outbox); se o
 --     Telegram cair, a venda continua válida e o envio é repetido depois.
 --   • Fornecedor é da NOTA de entrada: compra exige fornecedor e ele fica gravado em
---     movements.supplier_id; "INVENTARIO" é placeholder e nunca vale como fornecedor.
+--     movements.supplier_id; "INVENTARIO" (estoque em casa) é uma origem válida como qualquer outra.
 --   • Estoque baixo = saldo ABAIXO do mínimo; esgotado = saldo 0; mínimo 0 nunca alerta
 --     (stock_status é a regra única; Dashboard, Produtos e Reposição só leem dela).
 --   • Nome de produto em CAIXA ALTA; SKU/código de barras são texto, únicos e sem perder zero.
@@ -95,12 +95,9 @@ exception when others then
   raise notice 'Não foi possível criar índice único em suppliers (nomes duplicados existentes?): %', sqlerrm;
 end $$;
 
--- "INVENTARIO" (e variações) é só o valor de migração/inventário inicial: não é fornecedor real.
--- Fica no histórico, mas não aparece como opção em compras novas nem agrupa a Reposição.
+-- is_placeholder: origem que NÃO é fornecedor de verdade e não deve ser escolhida em compra nova.
+-- Nenhuma é marcada automaticamente: "INVENTARIO" é onde fica o estoque em casa e é uma origem VÁLIDA.
 alter table public.suppliers add column if not exists is_placeholder boolean not null default false;
-update public.suppliers set is_placeholder = true
- where not is_placeholder
-   and upper(translate(btrim(name), 'ÍÁÉÓÚíáéóú', 'IAEOUiaeou')) in ('INVENTARIO', 'INVENTARIO INICIAL', 'SEM FORNECEDOR');
 
 -- Fornecedores/origens de compra do lojista — pode crescer pela tela, isso aqui é só o ponto de partida.
 insert into public.suppliers (name)
@@ -2072,7 +2069,7 @@ $$;
 --   sugestão = quanto falta para chegar ao mínimo (mínimo − saldo), e pelo menos 1 — todo item
 --   listado precisa de reposição, então nunca aparece sugestão vazia.
 --   fornecedor = da compra mais recente (movements.supplier_id); sem compra registrada cai no
---   fornecedor guardado no produto; placeholder ("INVENTARIO") nunca conta como fornecedor.
+--   fornecedor guardado no produto; fornecedor marcado is_placeholder nunca conta.
 create or replace function public.stock_alert_rows()
 returns table (
   id uuid, name text, sku text, unit text, quantity numeric, min_stock numeric,

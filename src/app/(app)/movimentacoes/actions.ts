@@ -49,9 +49,6 @@ export async function createSupplierQuickAction(name: string): Promise<ActionSta
   }
   const trimmed = name.trim();
   if (!trimmed) return { error: "Informe o nome do fornecedor." };
-  if (/^(invent[aá]rio|sem fornecedor)/i.test(trimmed)) {
-    return { error: "Esse nome é reservado ao inventário inicial. Informe o fornecedor real." };
-  }
 
   const { data, error } = await supabase.from("suppliers").insert({ name: trimmed }).select("id, name").single();
   if (error) {
