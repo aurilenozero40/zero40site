@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Package, ScanBarcode, Trash2, X } from "lucide-react";
-import { createStockEntryAction, createSupplierQuickAction, type SupplierHit } from "@/app/(app)/movimentacoes/actions";
+import { checkSerialAction, createStockEntryAction, createSupplierQuickAction, type SupplierHit } from "@/app/(app)/movimentacoes/actions";
 import { createItemQuickAction } from "@/app/(app)/itens/actions";
-import { findItemByCode, normalizeCode } from "@/lib/barcode";
+import { findItemByCode, normalizeCode, sameCode } from "@/lib/barcode";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Item } from "@/lib/types";
 
@@ -89,6 +89,8 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
   const [pendingSerial, setPendingSerial] = useState<Item | null>(null);
   const [serialInput, setSerialInput] = useState("");
   const [serialError, setSerialError] = useState<string | null>(null);
+  const [expectedQtyText, setExpectedQtyText] = useState("");
+  const [serialChecking, setSerialChecking] = useState(false);
   const serialRef = useRef<HTMLInputElement>(null);
 
   const needsSupplier = subtype === "compra";
@@ -112,13 +114,26 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
 
   const focusScanner = () => setTimeout(() => barcodeRef.current?.focus(), 0);
 
-  /** Volta a nota ao estado inicial: sem itens, sem fornecedor, nova chave de idempotência. */
+  /** Volta a nota INTEIRA ao estado inicial: itens, painel de série, fornecedor, motivo, observação e chave. */
   function resetNote() {
     setLines([]);
     setNoteSupplierId("");
+    setSubtype("compra");
     setReason("");
     setSubmitError(null);
     setSuggestions(null);
+    setBarcodeInput("");
+    setNotice(null);
+    setPendingSerial(null);
+    setSerialInput("");
+    setSerialError(null);
+    setExpectedQtyText("");
+    setPendingSupplierItem(null);
+    setSupplierDraftId("");
+    setAddingSupplier(false);
+    setNewSupplierName("");
+    setPendingNewItem(false);
+    setNewItemError(null);
     setIdempotencyKey(crypto.randomUUID());
   }
 
@@ -141,6 +156,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
       setPendingSerial(item);
       setSerialInput("");
       setSerialError(null);
+      setExpectedQtyText("");
     } else {
       addOrIncrement(item);
     }
@@ -191,6 +207,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
   async function submitNewItem() {
     const name = newItemDraft.name.trim();
     if (!name) return setNewItemError("Informe o nome do produto.");
+    if (!newItemDraft.sku.trim()) return setNewItemError("Informe o SKU do produto (obrigatório).");
     setNewItemError(null);
     setNewItemPending(true);
     const r = await createItemQuickAction({
@@ -232,12 +249,28 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
     else setNoteSupplierId(r.data.id);
   }
 
-  function confirmSerialScan() {
+  async function confirmSerialScan() {
     const s = serialInput.trim();
     setSerialError(null);
-    if (!s || !pendingSerial) return;
-    if (lines.some((l) => l.serials.includes(s))) {
+    if (!s || !pendingSerial || serialChecking) return;
+    if (s.length < 4 || /\s/.test(s)) {
+      setSerialError("Número de série inválido: use ao menos 4 caracteres, sem espaços.");
+      return;
+    }
+    // erro típico: bipar o produto errado com o painel de série aberto
+    if (localItems.some((i) => sameCode(i.barcode, s) || sameCode(i.sku, s))) {
+      setSerialError(`"${s}" é o código de um produto, não um número de série. Bipe o número de série da peça.`);
+      return;
+    }
+    if (lines.some((l) => l.serials.some((x) => x.toLowerCase() === s.toLowerCase()))) {
       setSerialError(`${s} já foi bipado nesta entrada.`);
+      return;
+    }
+    setSerialChecking(true);
+    const check = await checkSerialAction(s); // já existe no banco?
+    setSerialChecking(false);
+    if (!check.ok) {
+      setSerialError(check.error);
       return;
     }
     const item = pendingSerial;
@@ -253,10 +286,34 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
     setSerialInput("");
   }
 
+  const serialCount = pendingSerial ? (lines.find((l) => l.itemId === pendingSerial.id)?.serials.length ?? 0) : 0;
+  const expectedSerials = expectedQtyText.trim() === "" ? null : Number(expectedQtyText.replace(",", "."));
+  const serialMismatch = expectedSerials !== null && (!Number.isInteger(expectedSerials) || expectedSerials !== serialCount);
+  const canFinishSerial = serialCount > 0 && !serialMismatch;
+
+  /** Só conclui com ao menos 1 serial e, se a quantidade foi informada, com exatamente essa quantidade. */
   function finishSerialEntry() {
+    if (!canFinishSerial) {
+      setSerialError(
+        serialCount === 0
+          ? "Bipe ao menos um número de série antes de concluir."
+          : `Você informou ${expectedQtyText} unidade(s), mas bipou ${serialCount}.`
+      );
+      return;
+    }
     setPendingSerial(null);
     setSerialInput("");
     setSerialError(null);
+    setExpectedQtyText("");
+    focusScanner();
+  }
+
+  /** Fecha o painel sem exigir nada (o que já foi bipado continua na nota). */
+  function cancelSerialEntry() {
+    setPendingSerial(null);
+    setSerialInput("");
+    setSerialError(null);
+    setExpectedQtyText("");
     focusScanner();
   }
 
@@ -284,6 +341,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
   if (lines.length > 0 && needsSupplier && !noteSupplierId) blocking.push("Informe o fornecedor da nota.");
   for (const l of lines) {
     if (lineQty(l) <= 0) blocking.push(`Quantidade inválida: ${l.name}`);
+    if (needsSupplier && parseNumber(l.unitValueText) <= 0) blocking.push(`Informe o custo unitário de ${l.name} (obrigatório em compra).`);
   }
   const canSubmit = lines.length > 0 && blocking.length === 0 && !busy;
 
@@ -418,7 +476,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
             </div>
             <div>
               <label className="label" htmlFor="new_item_sku">
-                SKU
+                SKU *
               </label>
               <input id="new_item_sku" className="input font-mono" value={newItemDraft.sku} onChange={(e) => setNewItemDraft((d) => ({ ...d, sku: e.target.value }))} />
             </div>
@@ -452,7 +510,7 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
             </p>
           )}
           <div className="flex gap-2">
-            <button type="button" className="btn-primary" disabled={newItemPending || !newItemDraft.name.trim()} onClick={submitNewItem}>
+            <button type="button" className="btn-primary" disabled={newItemPending || !newItemDraft.name.trim() || !newItemDraft.sku.trim()} onClick={submitNewItem}>
               {newItemPending ? "Cadastrando..." : "Cadastrar e continuar"}
             </button>
             <button
@@ -530,12 +588,26 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
           <p className="text-sm font-medium text-foreground">
             Números de série de <strong>{pendingSerial.name}</strong>
           </p>
+          <div className="flex items-center gap-2 text-xs text-muted">
+            <label htmlFor="serial_expected">Quantas unidades? (opcional)</label>
+            <input
+              id="serial_expected"
+              inputMode="numeric"
+              className="input h-8 w-20 px-2 text-center"
+              value={expectedQtyText}
+              onChange={(e) => {
+                setExpectedQtyText(e.target.value);
+                setSerialError(null);
+              }}
+            />
+            <span>Se informar, só conclui ao bipar exatamente essa quantidade.</span>
+          </div>
           <div className="flex gap-2">
             <input
               ref={serialRef}
               autoComplete="off"
               className="input h-11 flex-1 text-base"
-              placeholder="Bipe o número de série e aperte Enter"
+              placeholder="Bipe o número de série (não o código de barras do produto) e aperte Enter"
               value={serialInput}
               onChange={(e) => {
                 setSerialInput(e.target.value);
@@ -544,14 +616,17 @@ export function StockEntryForm({ items, suppliers }: { items: Item[]; suppliers:
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  confirmSerialScan();
+                  void confirmSerialScan();
                 } else if (e.key === "Escape") {
-                  finishSerialEntry();
+                  cancelSerialEntry();
                 }
               }}
             />
-            <button type="button" className="btn-primary shrink-0" onClick={finishSerialEntry}>
+            <button type="button" className="btn-primary shrink-0" disabled={!canFinishSerial} onClick={finishSerialEntry}>
               Concluir este item
+            </button>
+            <button type="button" className="btn-secondary shrink-0" onClick={cancelSerialEntry}>
+              Fechar
             </button>
           </div>
           {serialError && (

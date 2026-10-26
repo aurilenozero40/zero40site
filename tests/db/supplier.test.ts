@@ -19,7 +19,7 @@ const supplierId = async (name: string) => (await db.one<{ id: string }>("select
 
 const enter = (item: string, subtype: string, supplier: string | null) =>
   db.asUser(ids.manager, (c) =>
-    c.query("select public.create_movement('entrada', $1, 1, $2, null, null, null, null, $3) as r", [item, subtype, supplier])
+    c.query("select public.create_movement('entrada', $1, 1, $2, 10, null, null, null, $3) as r", [item, subtype, supplier])
   );
 
 const enterWithValue = (item: string, subtype: string, unitValue: number | null, supplier: string | null) =>
@@ -31,7 +31,7 @@ const note = (items: unknown[], opts: { supplier?: string | null; key?: string |
   db.asUser(
     ids.manager,
     async (c) =>
-      (await c.query("select public.create_stock_entry($1::jsonb, $2, null, $3, $4) as r", [JSON.stringify(items), opts.subtype ?? "compra", opts.supplier ?? null, opts.key ?? null])).rows[0]
+      (await c.query("select public.create_stock_entry($1::jsonb, $2, null, $3, $4) as r", [JSON.stringify(items.map((i) => ({ unit_value: 10, ...(i as object) }))), opts.subtype ?? "compra", opts.supplier ?? null, opts.key ?? null])).rows[0]
         .r as { count: number; already_processed?: boolean }
   );
 
@@ -46,7 +46,7 @@ describe("seed de fornecedores", () => {
     const inv = await d.one<{ id: string; is_placeholder: boolean }>("insert into suppliers (name) values ('INVENTARIO') returning id, is_placeholder");
     expect(inv.is_placeholder).toBe(false);
     const item = await addItem(d, { name: "Estoque em casa" });
-    await d.asUser(ids.manager, (c) => c.query("select public.create_movement('entrada', $1, 1, 'compra', null, null, null, null, $2)", [item, inv.id]));
+    await d.asUser(ids.manager, (c) => c.query("select public.create_movement('entrada', $1, 1, 'compra', 10, null, null, null, $2)", [item, inv.id]));
     const m = await d.one<{ supplier_id: string }>("select supplier_id from movements where item_id = $1 and subtype = 'compra'", [item]);
     expect(m.supplier_id).toBe(inv.id);
     await d.close();

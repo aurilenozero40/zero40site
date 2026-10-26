@@ -26,7 +26,7 @@ const sqlState = async (p: Promise<unknown>) => {
 
 const insertItem = (name: string, sku: string | null, barcode: string | null, active = true) =>
   db.q<{ id: string; name: string; sku: string | null; barcode: string | null }>(
-    "insert into items (name, sku, barcode, active, created_by) values ($1, $2, $3, $4, $5) returning id, name, sku, barcode",
+    "insert into items (name, sku, barcode, active, created_by) values ($1, coalesce($2, substr(gen_random_uuid()::text, 1, 10)), $3, $4, $5) returning id, name, sku, barcode",
     [name, sku, barcode, active, ids.admin]
   );
 
@@ -103,7 +103,7 @@ describe("auditoria de saldo (stock_integrity_report)", () => {
   });
 
   it("item com número de série: quantidade tem que ser igual aos seriais em estoque", async () => {
-    const item = await db.one<{ id: string }>("insert into items (name, track_serial, created_by) values ('Serial integridade', true, $1) returning id", [ids.admin]);
+    const item = await db.one<{ id: string }>("insert into items (sku, name, track_serial, created_by) values (substr(gen_random_uuid()::text, 1, 10), 'Serial integridade', true, $1) returning id", [ids.admin]);
     await db.asUser(ids.manager, (c) =>
       c.query("select public.create_movement('entrada', $1, null, 'outros', null, null, null, $2::jsonb)", [item.id, JSON.stringify(["IMEI-1", "IMEI-2"])])
     );

@@ -24,7 +24,7 @@ export default async function RelatorioSaidasPage({
   const { rows: data, truncated, error } = await fetchAllRows<MovementWithRelations>((from, to) =>
     supabase
       .from("movements")
-      .select("*, items(id, name, sku, unit), employees(id, full_name)")
+      .select("*, items(id, name, sku, unit), employees(id, full_name), sales(id, number, seller:employees!sales_seller_id_fkey(full_name))")
       .eq("type", "saida")
       .gte("created_at", start)
       .lt("created_at", end)
@@ -55,7 +55,7 @@ export default async function RelatorioSaidasPage({
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <KpiCard label="Movimentações" value={String(summary.count)} />
         <KpiCard label="Quantidade total" value={formatQuantity(summary.totalQuantity)} />
-        <KpiCard label="Valor total" value={formatCurrency(summary.totalValue)} />
+        <KpiCard label="Valor de tabela (bruto)" value={formatCurrency(summary.totalValue)} hint="não é o faturamento: ignora troca, desconto e juros" />
         <KpiCard
           label="Item mais movimentado"
           value={summary.topItemName ?? "-"}
@@ -63,6 +63,9 @@ export default async function RelatorioSaidasPage({
         />
       </div>
 
+      <p className="text-xs text-muted">
+        Movimentos de saída de <strong>{month.slice(5)}/{month.slice(0, 4)}</strong>, de todos os produtos (inclusive inativos). Outros meses não entram neste relatório.
+      </p>
       {truncated && (
         <p className="text-sm text-warning">Período com muitos registros: exibindo os 20.000 mais recentes.</p>
       )}

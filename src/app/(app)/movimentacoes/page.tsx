@@ -16,7 +16,7 @@ export default async function MovimentacoesPage({ searchParams }: { searchParams
 
   const { data: movements, count, error } = await supabase
     .from("movements")
-    .select("*, items(id, name, sku, unit), employees(id, full_name), suppliers(id, name)", { count: "exact" })
+    .select("*, items(id, name, sku, unit), employees(id, full_name), suppliers(id, name), sales(id, number, seller:employees!sales_seller_id_fkey(full_name))", { count: "exact" })
     .order("created_at", { ascending: false })
     .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
 

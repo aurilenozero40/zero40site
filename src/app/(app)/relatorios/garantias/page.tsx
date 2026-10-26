@@ -54,6 +54,7 @@ export default async function RelatorioGarantiasPage() {
 
   const { data: warrantyItems } = await supabase.from("items").select("id, warranty_months").not("warranty_months", "is", null);
   const itemIds = (warrantyItems ?? []).map((i) => i.id as string);
+  const noWarrantyConfigured = itemIds.length === 0;
   const monthsByItem = new Map((warrantyItems ?? []).map((i) => [i.id as string, i.warranty_months as number]));
 
   let rows: WarrantyRow[] = [];
@@ -121,7 +122,13 @@ export default async function RelatorioGarantiasPage() {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-muted">
-                  Nenhuma garantia vencendo nos próximos 30 dias.
+                  {noWarrantyConfigured ? (
+                    <>
+                      Nenhum produto com <strong>garantia (meses)</strong> configurada. Preencha a garantia no cadastro do produto para acompanhar os vencimentos aqui.
+                    </>
+                  ) : (
+                    "Nenhuma garantia vencendo nos próximos 30 dias."
+                  )}
                 </td>
               </tr>
             )}

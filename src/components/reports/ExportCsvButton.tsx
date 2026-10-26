@@ -28,7 +28,8 @@ export function ExportCsvButton({
       "Fornecedor",
       "Forma de pagamento",
       "Parcelas",
-      "Quem fez",
+      "Operador (registrou)",
+      "Vendedor da venda",
       "Canal",
     ];
 
@@ -45,6 +46,7 @@ export function ExportCsvButton({
       m.payment_method ?? "",
       m.installments ?? "",
       m.employees?.full_name ?? "",
+      m.sales?.seller?.full_name ?? "",
       m.source_channel,
     ]);
 

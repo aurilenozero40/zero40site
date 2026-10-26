@@ -5,8 +5,10 @@ import { redirect } from "next/navigation";
 import { requireEmployee } from "@/lib/auth/session";
 import { isManager } from "@/lib/roles";
 import { customerSchema } from "@/lib/validations";
+import { findDuplicateCustomers } from "@/lib/customers";
 
-export type ActionState = { error?: string } | null;
+/** duplicate: o cadastro parece repetido — a tela mostra "Cadastrar mesmo assim" (confirm_duplicate). */
+export type ActionState = { error?: string; duplicate?: boolean } | null;
 
 function parseFormData(formData: FormData) {
   return {
@@ -30,6 +32,21 @@ export async function createCustomer(_prev: ActionState, formData: FormData): Pr
   const { supabase } = await requireEmployee();
   const parsed = customerSchema.safeParse(parseFormData(formData));
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Dados inválidos" };
+
+  // Avisa (sem bloquear) se já existe cliente com o mesmo nome ou telefone parecido (1 dígito de diferença).
+  if (formData.get("confirm_duplicate") !== "on") {
+    const { data: existing } = await supabase.from("customers").select("id, name, phone, whatsapp").eq("active", true);
+    const dups = findDuplicateCustomers(
+      { name: parsed.data.name, phone: parsed.data.phone, whatsapp: parsed.data.whatsapp },
+      (existing ?? []) as { id: string; name: string; phone: string | null; whatsapp: string | null }[]
+    );
+    if (dups.length > 0) {
+      return {
+        duplicate: true,
+        error: `Parece repetido: ${dups.slice(0, 3).map((d) => `${d.name}${d.phone ? ` (${d.phone})` : ""}`).join("; ")}. Se for outra pessoa, marque "Cadastrar mesmo assim".`,
+      };
+    }
+  }
 
   const { data, error } = await supabase.from("customers").insert(parsed.data).select("id").single();
   if (error) return { error: friendlyCustomerError(error) };

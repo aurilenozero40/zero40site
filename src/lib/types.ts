@@ -138,6 +138,8 @@ export type MovementWithRelations = Movement & {
   items: Pick<Item, "id" | "name" | "sku" | "unit"> | null;
   employees: Pick<Employee, "id" | "full_name"> | null;
   suppliers?: Pick<Supplier, "id" | "name"> | null;
+  /** venda que originou o movimento (saídas de venda, devoluções, cancelamentos): traz o VENDEDOR da venda. */
+  sales?: { id: string; number: number; seller: { full_name: string } | null } | null;
 };
 
 // ---- Vendas ---------------------------------------------------------------------------

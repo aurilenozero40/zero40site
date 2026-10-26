@@ -14,6 +14,7 @@ const PAGE_SIZE = 25;
 interface Params {
   q?: string;
   baixo?: string;
+  incompletos?: string;
   inativos?: string;
   seminovos?: string;
   categoria?: string;
@@ -26,6 +27,7 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
   const page = parsePage(params.pagina);
   const q = (params.q ?? "").trim().slice(0, 80);
   const onlyLow = params.baixo === "1";
+  const onlyIncomplete = params.incompletos === "1";
   const showInactive = params.inativos === "1";
   const onlyUsed = params.seminovos === "1";
   const category = (params.categoria ?? "").trim();
@@ -39,6 +41,8 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
 
   if (!showInactive) query = query.eq("active", true);
   if (onlyUsed) query = query.eq("condition", "seminovo");
+  // cadastro incompleto: sem SKU ou sem código de barras (não são lidos pela entrada por código)
+  if (onlyIncomplete) query = query.or("sku.is.null,barcode.is.null");
   if (category) query = query.eq("category", category);
 
   if (q) {
@@ -123,6 +127,9 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
             <input type="checkbox" name="baixo" value="1" defaultChecked={onlyLow} /> Estoque baixo / esgotado
           </label>
           <label className="flex items-center gap-2">
+            <input type="checkbox" name="incompletos" value="1" defaultChecked={onlyIncomplete} /> Cadastro incompleto (sem SKU ou código de barras)
+          </label>
+          <label className="flex items-center gap-2">
             <input type="checkbox" name="seminovos" value="1" defaultChecked={onlyUsed} /> Só seminovos
           </label>
           <label className="flex items-center gap-2">
@@ -140,6 +147,7 @@ export default async function ItensPage({ searchParams }: { searchParams: Promis
         params={{
           q: q || undefined,
           baixo: onlyLow ? "1" : undefined,
+          incompletos: onlyIncomplete ? "1" : undefined,
           seminovos: onlyUsed ? "1" : undefined,
           categoria: category || undefined,
           inativos: showInactive ? "1" : undefined,

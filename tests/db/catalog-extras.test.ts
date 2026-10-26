@@ -13,13 +13,13 @@ afterAll(async () => {
 describe("items.warranty_months", () => {
   it("aceita null (sem garantia controlada) e recusa valor <= 0", async () => {
     await expect(
-      db.q("insert into items (name, sale_price, warranty_months, created_by) values ('Sem garantia', 10, null, $1)", [ids.admin])
+      db.q("insert into items (sku, name, sale_price, warranty_months, created_by) values (substr(gen_random_uuid()::text, 1, 10), 'Sem garantia', 10, null, $1)", [ids.admin])
     ).resolves.toBeTruthy();
     await expect(
-      db.q("insert into items (name, sale_price, warranty_months, created_by) values ('Com garantia', 10, 12, $1)", [ids.admin])
+      db.q("insert into items (sku, name, sale_price, warranty_months, created_by) values (substr(gen_random_uuid()::text, 1, 10), 'Com garantia', 10, 12, $1)", [ids.admin])
     ).resolves.toBeTruthy();
     await expect(
-      db.q("insert into items (name, sale_price, warranty_months, created_by) values ('Garantia inválida', 10, 0, $1)", [ids.admin])
+      db.q("insert into items (sku, name, sale_price, warranty_months, created_by) values (substr(gen_random_uuid()::text, 1, 10), 'Garantia inválida', 10, 0, $1)", [ids.admin])
     ).rejects.toThrow();
   });
 });
@@ -51,7 +51,7 @@ describe("kits: leitura pra todos, escrita só gerente+", () => {
 describe("item_sales_ranking traz categoria e marca", () => {
   it("devolve category e manufacturer de cada item", async () => {
     const row = await db.one<{ id: string }>(
-      "insert into items (name, sale_price, category, manufacturer, created_by) values ('Rastreador cat', 200, 'GPS', 'Garmin', $1) returning id",
+      "insert into items (sku, name, sale_price, category, manufacturer, created_by) values (substr(gen_random_uuid()::text, 1, 10), 'Rastreador cat', 200, 'GPS', 'Garmin', $1) returning id",
       [ids.admin]
     );
     await db.q("insert into movements (item_id, type, subtype, quantity, created_by) values ($1,'entrada','compra',5,$2)", [row.id, ids.admin]);
@@ -61,7 +61,7 @@ describe("item_sales_ranking traz categoria e marca", () => {
     const list = r.rows[0].r as { item_id: string; category: string | null; manufacturer: string | null }[];
     const found = list.find((x) => x.item_id === row.id)!;
     expect(found.category).toBe("GPS");
-    expect(found.manufacturer).toBe("Garmin");
+    expect(found.manufacturer).toBe("GARMIN"); // marca é normalizada em caixa alta
   });
 });
 

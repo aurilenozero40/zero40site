@@ -27,8 +27,8 @@ describe("entrada de estoque em lote (nota com vários produtos)", () => {
     const a = await addItem(db, { name: "Nota A" });
     const b = await addItem(db, { name: "Nota B" });
     const r = await entry([
-      { item_id: a, quantity: 10, supplier_id: supplier },
-      { item_id: b, quantity: 3, supplier_id: supplier },
+      { item_id: a, quantity: 10, unit_value: 10, supplier_id: supplier },
+      { item_id: b, quantity: 3, unit_value: 10, supplier_id: supplier },
     ]);
     expect((r.rows[0].r as { count: number }).count).toBe(2);
 
@@ -43,12 +43,12 @@ describe("entrada de estoque em lote (nota com vários produtos)", () => {
   it("mistura item por quantidade e item com número de série na mesma nota", async () => {
     const qtyItem = await addItem(db, { name: "Nota C" });
     const serialItem = await db.one<{ id: string }>(
-      "insert into items (name, sale_price, track_serial, created_by) values ('Nota D', 100, true, $1) returning id",
+      "insert into items (sku, name, sale_price, track_serial, created_by) values (substr(gen_random_uuid()::text, 1, 10), 'Nota D', 100, true, $1) returning id",
       [ids.admin]
     );
     await entry([
-      { item_id: qtyItem, quantity: 5, supplier_id: supplier },
-      { item_id: serialItem.id, serials: ["NOTA-D-1", "NOTA-D-2"], supplier_id: supplier },
+      { item_id: qtyItem, quantity: 5, unit_value: 10, supplier_id: supplier },
+      { item_id: serialItem.id, serials: ["NOTA-D-1", "NOTA-D-2"], unit_value: 10, supplier_id: supplier },
     ]);
 
     const [qa, qb] = await Promise.all([
@@ -65,8 +65,8 @@ describe("entrada de estoque em lote (nota com vários produtos)", () => {
 
     const hint = await hintOf(
       entry([
-        { item_id: good, quantity: 7, supplier_id: supplier },
-        { item_id: bad, quantity: 2 }, // 'compra' sem fornecedor -> falha
+        { item_id: good, quantity: 7, unit_value: 10, supplier_id: supplier },
+        { item_id: bad, quantity: 2, unit_value: 10 }, // 'compra' sem fornecedor -> falha
       ])
     );
     expect(hint).toBe("SUPPLIER_REQUIRED");
@@ -78,7 +78,7 @@ describe("entrada de estoque em lote (nota com vários produtos)", () => {
   it("vendedor não lança entrada em lote", async () => {
     const item = await addItem(db, { name: "Nota G" });
     const hint = await hintOf(
-      db.asUser(ids.seller, (c) => c.query("select public.create_stock_entry($1::jsonb, 'compra', null)", [JSON.stringify([{ item_id: item, quantity: 1, supplier_id: supplier }])]))
+      db.asUser(ids.seller, (c) => c.query("select public.create_stock_entry($1::jsonb, 'compra', null)", [JSON.stringify([{ item_id: item, quantity: 1, unit_value: 10, supplier_id: supplier }])]))
     );
     expect(hint).toBe("FORBIDDEN");
   });
@@ -91,8 +91,8 @@ describe("entrada de estoque em lote (nota com vários produtos)", () => {
     const a = await addItem(db, { name: "Nota H" });
     const b = await addItem(db, { name: "Nota I" });
     await entry([
-      { item_id: a, quantity: 1, supplier_id: supplier },
-      { item_id: b, quantity: 1, supplier_id: supplier2 },
+      { item_id: a, quantity: 1, unit_value: 10, supplier_id: supplier },
+      { item_id: b, quantity: 1, unit_value: 10, supplier_id: supplier2 },
     ]);
     const [ra, rb] = await Promise.all([
       db.one<{ supplier_id: string }>("select supplier_id from items where id = $1", [a]),
