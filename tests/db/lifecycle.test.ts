@@ -544,7 +544,7 @@ describe("conteúdo do evento de venda (o que o Telegram vai mostrar)", () => {
     });
     const [ev] = await events("SALE_COMPLETED", sale.sale_id);
     const p = ev.payload as Record<string, unknown> & { items: Record<string, unknown>[]; stock: Record<string, unknown>[]; payment: Record<string, unknown> };
-    expect(p).toMatchObject({ code: sale.code, seller: "Marina Gerente", customer: "Carlos Oliveira", subtotal: 4499, discount: 100, interest: 299.13, total: 4698.13 });
+    expect(p).toMatchObject({ code: sale.code, seller: "Marina Gerente", customer: "CARLOS OLIVEIRA", subtotal: 4499, discount: 100, interest: 299.13, total: 4698.13 });
     expect(p.items[0]).toMatchObject({ name: "IPHONE 15 128GB", quantity: 1, unit_price: 4499 });
     expect(p.stock[0]).toMatchObject({ name: "IPHONE 15 128GB", before: 7, after: 6 });
     expect(p.payment).toMatchObject({ method: "credito_parcelado", installments: 10, installment_value: 469.81, interest_percent: 6.8, card_brand: "master", fee_percent: 8.89 });

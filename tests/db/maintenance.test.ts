@@ -18,12 +18,12 @@ afterAll(async () => {
 const script = (name: string) => fs.readFileSync(path.resolve(__dirname, "..", "..", "supabase", "maintenance", name), "utf8");
 
 /** Preenche o plano e troca o ROLLBACK final por COMMIT (como o dono faria depois de revisar). */
-const withPlan = (sql: string, plan: string) => sql.replace(/\nbegin;\n/, `\n${plan}\nbegin;\n`).replace(/rollback;\s*--.*$/m, "commit;");
+const withPlan = (sql: string, plan: string) => sql.replace(/\r?\nbegin;\r?\n/, `\n${plan}\nbegin;\n`).replace(/rollback;\s*--.*$/m, "commit;");
 
 describe("limpeza reversível de duplicados", () => {
   it("desativa o duplicado (sem apagar), move o saldo por ajustes no ledger, vincula a conta duplicada e o desfazer restaura", async () => {
-    const principal = await addItem(db, { name: "GARMIN 265", stock: 2, barcode: "111" });
-    const duplicado = await addItem(db, { name: "GARMIN 265 DUP", stock: 3, barcode: "222" });
+    const principal = await addItem(db, { name: "GARMIN 265", stock: 2, cost: 5, barcode: "111" });
+    const duplicado = await addItem(db, { name: "GARMIN 265 DUP", stock: 3, cost: 5, barcode: "222" });
     await db.q("update items set sku = 'S-265' where id = $1", [duplicado]);
     const oregon = await addItem(db, { name: "temp" });
 

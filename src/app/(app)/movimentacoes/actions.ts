@@ -7,6 +7,7 @@ import { requireEmployee } from "@/lib/auth/session";
 import { isManager } from "@/lib/roles";
 import { processNotifications } from "@/lib/notifications";
 import { friendlyRpcError } from "@/lib/sales/errors";
+import { escapeLike } from "@/lib/utils";
 import { movementSchema } from "@/lib/validations";
 
 export type ActionState = { error?: string } | null;
@@ -131,6 +132,24 @@ export async function createStockEntryAction(input: {
   revalidatePath("/relatorios/reposicao");
   const result = data as { count?: number; already_processed?: boolean };
   return { ok: true, data: { count: result.count ?? input.items.length, alreadyProcessed: result.already_processed === true } };
+}
+
+/** Confere (antes de registrar) se um número de série já existe no banco — qualquer produto, qualquer status. */
+export async function checkSerialAction(serial: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { supabase } = await requireEmployee();
+  const s = serial.trim();
+  if (s.length < 4 || /\s/.test(s)) return { ok: false, error: "Número de série inválido: use ao menos 4 caracteres, sem espaços." };
+
+  const [{ data: dup }, { data: asProduct }] = await Promise.all([
+    supabase.from("item_serials").select("id").eq("serial", s).maybeSingle(),
+    // só consulta quando o texto parece um código (vírgula/parêntese quebrariam o filtro `or`)
+    /^[\w./-]+$/.test(s)
+      ? supabase.from("items").select("id").or(`barcode.ilike.${escapeLike(s)},sku.ilike.${escapeLike(s)}`).limit(1)
+      : Promise.resolve({ data: [] as { id: string }[] }),
+  ]);
+  if (dup) return { ok: false, error: `O número de série ${s} já está cadastrado.` };
+  if ((asProduct ?? []).length > 0) return { ok: false, error: `"${s}" é o código de um produto, não um número de série.` };
+  return { ok: true };
 }
 
 /** Números de série ainda em estoque de um item (para saída/ajuste: escolher quais unidades saem). */

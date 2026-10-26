@@ -47,6 +47,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     { data: alertsData },
     { data: recent },
     { data: inventory },
+    { data: noCostRows },
   ] = await Promise.all([
     rev(today),
     rev(week),
@@ -59,7 +60,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       .order("created_at", { ascending: false })
       .limit(8),
     manager ? supabase.rpc("inventory_summary") : Promise.resolve({ data: null }),
+    // produto com estoque e sem custo: o "estoque a custo" e a margem ficam subestimados
+    manager
+      ? supabase.from("items").select("id, name, quantity, unit").eq("active", true).gt("quantity", 0).or("cost_price.is.null,cost_price.eq.0").order("name")
+      : Promise.resolve({ data: null }),
   ]);
+  const noCost = (noCostRows ?? []) as { id: string; name: string; quantity: number; unit: string }[];
 
   if (dashError) {
     console.error(`[dashboard] sales_dashboard falhou: code=${dashError.code} message=${dashError.message}`);
@@ -110,10 +116,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         </div>
 
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <KpiCard label="Faturamento" value={formatCurrency(Number(d.revenue))} icon={CircleDollarSign} tone="success" hint={Number(d.discounts) > 0 ? `${formatCurrency(Number(d.discounts))} em descontos` : undefined} />
+          <KpiCard label="Faturamento" value={formatCurrency(Number(d.revenue))} icon={CircleDollarSign} tone="success" hint={Number(d.discounts) > 0 ? `${formatCurrency(Number(d.discounts))} em descontos concedidos` : undefined} />
           <KpiCard label="Vendas" value={String(d.sales_count)} icon={Receipt} />
           <KpiCard label="Ticket médio" value={formatCurrency(Number(d.ticket_avg))} icon={Ticket} />
-          <KpiCard label="Produtos vendidos" value={formatQuantity(Number(d.units_sold))} icon={ShoppingBag} hint={Number(d.interest) > 0 ? `${formatCurrency(Number(d.interest))} em juros` : undefined} />
+          <KpiCard label="Produtos vendidos" value={formatQuantity(Number(d.units_sold))} icon={ShoppingBag} hint={Number(d.interest) > 0 ? `${formatCurrency(Number(d.interest))} em juros líquidos (parcelado)` : undefined} />
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -201,6 +207,25 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           </div>
         )}
       </div>
+
+      {manager && noCost.length > 0 && (
+        <div className="card border-warning/40 bg-warning/5">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <AlertOctagon size={16} className="text-warning" /> {noCost.length} {noCost.length === 1 ? "produto com estoque e sem custo" : "produtos com estoque e sem custo"}
+          </h3>
+          <p className="mt-1 text-xs text-muted">O estoque a custo e a margem ficam subestimados. Informe o custo de cada um (Produtos → editar).</p>
+          <ul className="mt-2 flex flex-col divide-y divide-border text-sm">
+            {noCost.map((i) => (
+              <li key={i.id} className="flex items-center justify-between gap-2 py-1.5">
+                <Link href={`/itens/${i.id}`} className="truncate text-foreground hover:underline">
+                  {i.name}
+                </Link>
+                <span className="shrink-0 text-xs text-muted">{formatQuantity(Number(i.quantity), i.unit)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {manager && inv && (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

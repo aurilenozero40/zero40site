@@ -107,9 +107,9 @@ function ItemFormBody({
 
         <div>
           <label className="label" htmlFor="sku">
-            SKU
+            SKU *
           </label>
-          <input id="sku" name="sku" className="input" defaultValue={item?.sku ?? ""} />
+          <input id="sku" name="sku" className="input" required defaultValue={item?.sku ?? ""} />
         </div>
 
         <div>

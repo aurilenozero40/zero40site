@@ -46,7 +46,10 @@ function friendlyItemError(error: { message: string; code?: string }) {
       return "Já existe outro item com esse SKU. Cada produto precisa ter um SKU diferente.";
     }
   }
-  if ((error as { hint?: string }).hint === "NAME_REQUIRED") return "Nome é obrigatório.";
+  const hint = (error as { hint?: string }).hint;
+  if (hint === "NAME_REQUIRED") return "Nome é obrigatório.";
+  if (hint === "SKU_REQUIRED") return "Informe o SKU: todo produto ativo precisa de SKU.";
+  if (hint === "COST_REQUIRED") return "Informe o custo do produto (maior que zero): ele tem estoque e está sem custo.";
   if (error.code === "42501") {
     return "Você não tem permissão para cadastrar ou alterar produtos.";
   }
@@ -122,6 +125,7 @@ export async function createItemQuickAction(input: {
   }
   const name = input.name.trim();
   if (!name) return { ok: false, error: "Informe o nome do produto." };
+  if (!input.sku?.trim()) return { ok: false, error: "Informe o SKU do produto (obrigatório)." };
 
   const { data, error } = await supabase
     .from("items")

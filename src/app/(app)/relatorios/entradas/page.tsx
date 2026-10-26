@@ -74,11 +74,14 @@ export default async function RelatorioEntradasPage({
         />
       </div>
 
+      <p className="text-xs text-muted">
+        Movimentos de entrada de <strong>{month.slice(5)}/{month.slice(0, 4)}</strong>, de todos os produtos (inclusive inativos). Outros meses não entram neste relatório; a lista de Movimentações mostra todo o histórico.
+      </p>
       {truncated && (
         <p className="text-sm text-warning">Período com muitos registros: exibindo os 20.000 mais recentes.</p>
       )}
       <MonthlyMovementsChart data={chartData} />
-      <MovementsTable movements={movements} unitLabel="Custo unit." />
+      <MovementsTable movements={movements} unitLabel="Custo unit." showSeller={false} />
     </div>
   );
 }

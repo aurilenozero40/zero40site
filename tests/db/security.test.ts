@@ -39,7 +39,7 @@ describe("estoque só muda pelo ledger", () => {
     );
     expect(code).toBe(DENIED);
     const ok = await codeOf(
-      db.asUser(ids.manager, (c) => c.query("insert into items (name, sale_price) values ('Sem estoque', 10)"))
+      db.asUser(ids.manager, (c) => c.query("insert into items (sku, name, sale_price) values (substr(gen_random_uuid()::text, 1, 10), 'Sem estoque', 10)"))
     );
     expect(ok).toBe("ok");
   });
@@ -63,7 +63,7 @@ describe("preço e cadastro: só gerente+", () => {
     expect(Number((await db.one<{ sale_price: string }>("select sale_price from items where id = $1", [item])).sale_price)).toBe(100);
 
     expect(
-      await codeOf(db.asUser(ids.seller, (c) => c.query("insert into items (name, sale_price) values ('Invasor', 1)")))
+      await codeOf(db.asUser(ids.seller, (c) => c.query("insert into items (sku, name, sale_price) values ('INVASOR1', 'Invasor', 1)")))
     ).toBe(DENIED);
 
     const mgr = await db.asUser(ids.manager, (c) => c.query("update items set sale_price = 120 where id = $1", [item]));
@@ -108,7 +108,7 @@ describe("movimentações manuais", () => {
   // Toda movimentação manual (entrada/saída/ajuste) passa pela função create_movement — ela
   // confere perfil, coerência tipo×subtipo e nunca aceita subtype 'venda'/'cancelamento' à mão.
   const callMv = (user: string, item: string, type: string, subtype: string, reason: string | null = null, supplierId: string | null = null) =>
-    db.asUser(user, (c) => c.query("select public.create_movement($1, $2, 1, $3, null, $4, null, null, $5)", [type, item, subtype, reason, supplierId]));
+    db.asUser(user, (c) => c.query("select public.create_movement($1, $2, 1, $3, 10, $4, null, null, $5)", [type, item, subtype, reason, supplierId]));
 
   it("vendedor não lança; gerente lança compra/perda; ninguém lança 'venda' ou 'cancelamento' à mão", async () => {
     const item = await addItem(db, { name: "Manual", stock: 5 });

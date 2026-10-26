@@ -1121,6 +1121,10 @@ begin
   if p_supplier_id is not null and exists (select 1 from public.suppliers where id = p_supplier_id and is_placeholder) then
     raise exception 'Esse não é um fornecedor real. Escolha de quem a compra veio.' using errcode = 'P0001', hint = 'SUPPLIER_PLACEHOLDER';
   end if;
+  -- Custo é obrigatório em compra: sem ele o "estoque a custo" e a margem ficam errados.
+  if p_type = 'entrada' and p_subtype = 'compra' and coalesce(p_unit_value, 0) <= 0 then
+    raise exception 'Informe o custo unitário (maior que zero) de %.', v_item.name using errcode = 'P0001', hint = 'COST_REQUIRED';
+  end if;
 
   v_is_decrease := p_type = 'saida' or (p_type = 'ajuste' and not p_adjustment_increases_stock);
 
@@ -1151,6 +1155,17 @@ begin
       end loop;
     else
       for v_serial in select unnest(v_serials) loop
+        -- Número de série não pode ser vazio/curto/com espaço, nem ser o código de barras/SKU de um produto
+        -- (erro típico: bipar o produto errado com o painel de série aberto).
+        if length(v_serial) < 4 or v_serial ~ '[[:space:]]' then
+          raise exception 'Número de série inválido: "%". Use ao menos 4 caracteres, sem espaços.', v_serial
+            using errcode = 'P0001', hint = 'SERIAL_INVALID';
+        end if;
+        if exists (select 1 from public.items i
+                    where lower(btrim(i.barcode)) = lower(v_serial) or upper(btrim(i.sku)) = upper(v_serial)) then
+          raise exception '"%" é o código de um produto, não um número de série.', v_serial
+            using errcode = 'P0001', hint = 'SERIAL_IS_PRODUCT_CODE';
+        end if;
         if exists (select 1 from public.item_serials where serial = v_serial) then
           raise exception 'Número de série % já está cadastrado.', v_serial
             using errcode = 'P0001', hint = 'SERIAL_DUPLICATE';
@@ -1612,8 +1627,14 @@ begin
   -- Entrada (troca): cadastra o produto recebido como seminovo e dá entrada de 1 unidade,
   -- vinculada a esta venda. custo = valor da entrada (é o que a loja "pagou" por ele).
   if v_ti_value > 0 then
-    insert into public.items (name, category, condition, cost_price, active, created_by)
-    values (v_ti_name, v_ti_category, 'seminovo', v_ti_value, true, v_uid)
+    -- SKU próprio (todo produto ativo tem SKU) e nome que não colida com produto ativo de mesmo nome.
+    if exists (select 1 from public.items
+                where active and upper(regexp_replace(btrim(name), '[[:space:]]+', ' ', 'g'))
+                                = upper(regexp_replace(btrim(v_ti_name), '[[:space:]]+', ' ', 'g'))) then
+      v_ti_name := v_ti_name || ' (ENTRADA ' || public.sale_code(v_number) || ')';
+    end if;
+    insert into public.items (name, sku, category, condition, cost_price, active, created_by)
+    values (v_ti_name, 'TROCA-' || public.sale_code(v_number), v_ti_category, 'seminovo', v_ti_value, true, v_uid)
     returning id into v_ti_item_id;
 
     insert into public.movements (item_id, type, subtype, quantity, unit_value, reason,
@@ -1927,8 +1948,11 @@ as $$
   kpi as (
     select coalesce(sum(total - refunded_amount), 0) as revenue,
            count(*) filter (where status <> 'devolvida') as sales_count,
-           coalesce(sum(interest_amount), 0) as interest,
-           coalesce(sum(discount_amount), 0) as discounts,
+           -- Venda parcelada costuma ter o total digitado pelo vendedor: o sistema fecha a conta com juros
+           -- inteiros + um "desconto" de resíduo. Só conta como DESCONTO o que veio sem juros; nas vendas
+           -- com juros, o que importa é o juros LÍQUIDO (juros − ajuste).
+           coalesce(sum(interest_amount - discount_amount) filter (where interest_amount > 0), 0) as interest,
+           coalesce(sum(discount_amount) filter (where interest_amount = 0), 0) as discounts,
            coalesce(sum(trade_in_amount), 0) as trade_in_total
       from s
   ),
@@ -2187,14 +2211,42 @@ begin
   end if;
   new.sku := upper(nullif(btrim(new.sku), ''));
   new.barcode := nullif(btrim(new.barcode), '');
+  -- marca/fabricante e categoria: sem espaços sobrando; marca em CAIXA ALTA (acaba "Garmin" x "GARMIN").
+  new.manufacturer := upper(nullif(regexp_replace(btrim(coalesce(new.manufacturer, '')), '[[:space:]]+', ' ', 'g'), ''));
+  new.category := nullif(regexp_replace(btrim(coalesce(new.category, '')), '[[:space:]]+', ' ', 'g'), '');
+  -- Produto ATIVO precisa de SKU; e, tendo estoque, precisa de custo (senão o estoque a custo e a margem mentem).
+  if new.active and new.sku is null then
+    raise exception 'Informe o SKU do produto % (todo produto ativo precisa de SKU).', new.name
+      using errcode = 'P0001', hint = 'SKU_REQUIRED';
+  end if;
+  if tg_op = 'UPDATE' and new.active and new.quantity > 0 and coalesce(new.cost_price, 0) <= 0 then
+    raise exception 'Informe o custo do produto % (ele tem estoque e está sem custo).', new.name
+      using errcode = 'P0001', hint = 'COST_REQUIRED';
+  end if;
   return new;
 end;
 $$;
 
 drop trigger if exists trg_items_normalize on public.items;
 create trigger trg_items_normalize
-  before insert or update of name, sku, barcode on public.items
+  before insert or update of name, sku, barcode, manufacturer, category, active, cost_price on public.items
   for each row execute function public.items_normalize();
+
+-- Cliente: nome sem espaços sobrando e em CAIXA ALTA (acaba "joao", "Paulo", "RUBENS SF").
+create or replace function public.customers_normalize()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.name := upper(regexp_replace(btrim(coalesce(new.name, '')), '[[:space:]]+', ' ', 'g'));
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_customers_normalize on public.customers;
+create trigger trg_customers_normalize
+  before insert or update of name on public.customers
+  for each row execute function public.customers_normalize();
 
 -- Unicidade normalizada (sem diferenciar maiúscula/minúscula nem espaços nas pontas).
 -- Se o banco ainda tiver duplicados, o índice não é criado (aviso) — limpe com

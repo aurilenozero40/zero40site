@@ -18,7 +18,7 @@ afterAll(async () => {
 
 async function addSerialItem(name: string, price = 100): Promise<string> {
   const row = await db.one<{ id: string }>(
-    "insert into items (name, sale_price, track_serial, created_by) values ($1, $2, true, $3) returning id",
+    "insert into items (sku, name, sale_price, track_serial, created_by) values (substr(gen_random_uuid()::text, 1, 10), $1, $2, true, $3) returning id",
     [name, price, ids.admin]
   );
   return row.id;
@@ -26,7 +26,7 @@ async function addSerialItem(name: string, price = 100): Promise<string> {
 
 const enter = (user: string, item: string, serials: string[]) =>
   db.asUser(user, (c) =>
-    c.query("select public.create_movement('entrada', $1, null, 'compra', null, 'nota fiscal', null, $2::jsonb, $3) as r", [
+    c.query("select public.create_movement('entrada', $1, null, 'compra', 10, 'nota fiscal', null, $2::jsonb, $3) as r", [
       item,
       JSON.stringify(serials),
       supplier,
@@ -141,11 +141,11 @@ describe("venda com número de série", () => {
 
   it("produto sem track_serial recusa serial no carrinho", async () => {
     const row = await db.one<{ id: string }>(
-      "insert into items (name, sale_price, created_by) values ('Sem serial', 50, $1) returning id",
+      "insert into items (sku, name, sale_price, created_by) values (substr(gen_random_uuid()::text, 1, 10), 'Sem serial', 50, $1) returning id",
       [ids.admin]
     );
     await db.asUser(ids.manager, (c) =>
-      c.query("select public.create_movement('entrada', $1, 5, 'compra', null, null, null, null, $2)", [row.id, supplier])
+      c.query("select public.create_movement('entrada', $1, 5, 'compra', 10, null, null, null, $2)", [row.id, supplier])
     );
     const hint = await hintOf(
       db.asUser(ids.seller, (c) =>

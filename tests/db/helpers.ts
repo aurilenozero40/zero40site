@@ -143,8 +143,8 @@ export interface NewItem {
 /** Cadastra produto e dá entrada no estoque pelo ledger (como o sistema real faz). */
 export async function addItem(db: TestDb, i: NewItem): Promise<string> {
   const row = await db.one<{ id: string }>(
-    `insert into items (name, sale_price, cost_price, min_stock, barcode, active, created_by)
-     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+    `insert into items (sku, name, sale_price, cost_price, min_stock, barcode, active, created_by)
+     values (substr(gen_random_uuid()::text, 1, 10), $1, $2, $3, $4, $5, $6, $7) returning id`,
     [i.name, i.price === undefined ? 100 : i.price, i.cost ?? null, i.min ?? 0, i.barcode ?? null, i.active ?? true, ids.admin]
   );
   if (i.stock && i.stock > 0) {

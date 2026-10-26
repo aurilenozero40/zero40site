@@ -73,7 +73,7 @@ export default async function ItemDetailPage({
     supabase.from("suppliers").select("*").eq("is_placeholder", false).order("name"),
     supabase
       .from("movements")
-      .select("*, items(id, name, sku, unit), employees(id, full_name), suppliers(id, name)")
+      .select("*, items(id, name, sku, unit), employees(id, full_name), suppliers(id, name), sales(id, number, seller:employees!sales_seller_id_fkey(full_name))")
       .eq("item_id", id)
       .order("created_at", { ascending: false })
       .limit(50),

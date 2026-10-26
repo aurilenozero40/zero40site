@@ -73,6 +73,11 @@ export function CustomerForm({
       </div>
 
       {state?.error && <p className="text-sm text-danger">{state.error}</p>}
+      {state?.duplicate && (
+        <label className="flex items-center gap-2 text-sm text-foreground">
+          <input type="checkbox" name="confirm_duplicate" /> Cadastrar mesmo assim (é outra pessoa)
+        </label>
+      )}
 
       <div>
         <button type="submit" className="btn-primary" disabled={pending}>

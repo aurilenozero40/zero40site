@@ -37,7 +37,10 @@ export default async function RelatorioCategoriasPage() {
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-xl font-semibold text-foreground">Vendas por categoria e marca</h1>
-        <p className="text-sm text-muted">Faturamento histórico (todas as vendas concluídas) agrupado por categoria e por fabricante/marca.</p>
+        <p className="text-sm text-muted">
+          <strong>Valor de tabela (bruto)</strong> de todas as vendas, agrupado por categoria e por marca. É o preço de tabela dos produtos vendidos: não considera troca, desconto nem juros,
+          por isso é maior que o faturamento do Dashboard (valor pago pelo cliente, líquido de devolução).
+        </p>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
