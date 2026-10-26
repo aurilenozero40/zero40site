@@ -13,12 +13,14 @@ having count(*) > 1
  order by 1;
 
 -- B) Quase-duplicados: nomes que só diferem em 1-2 letras (GARMIN FENIX 8 PRO PRETA x PRETO, GARMINN x GARMIN...).
---    (precisa da extensão pg_trgm: create extension if not exists pg_trgm;)
+--    Precisa da extensão pg_trgm (só adiciona a função similarity; não mexe em dados). Rode esta linha antes:
+create extension if not exists pg_trgm with schema extensions;
+
 select a.id as id_a, a.name as nome_a, a.sku as sku_a, a.quantity as estoque_a,
        b.id as id_b, b.name as nome_b, b.sku as sku_b, b.quantity as estoque_b,
-       round(similarity(upper(a.name), upper(b.name))::numeric, 2) as similaridade
+       round(extensions.similarity(upper(a.name), upper(b.name))::numeric, 2) as similaridade
   from items a
-  join items b on a.id < b.id and similarity(upper(a.name), upper(b.name)) > 0.8
+  join items b on a.id < b.id and extensions.similarity(upper(a.name), upper(b.name)) > 0.8
  order by similaridade desc, a.name;
 
 -- C) SKU / código de barras repetidos (normalizados) — impedem o índice único de ser criado.

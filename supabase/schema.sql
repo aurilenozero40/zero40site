@@ -20,9 +20,10 @@
 --    8. Triggers ................ novo usuário, estoque, imutabilidade, auditoria
 --    9. Segurança ............... RLS + privilégios
 --   10. Regras de negócio ....... create_sale, cancel_sale, return_sale_items
---   11. Relatórios .............. dashboard, alertas de estoque, resumo mensal
+--   11. Relatórios .............. dashboard, regra única de estoque baixo/esgotado, reposição, resumo mensal
 --   12. Permissão de execução
---   13. Realtime
+--   13. Cadastro de produtos .... normalização, unicidade, auditoria de saldo
+--   14. Realtime
 --
 -- REGRAS QUE O BANCO GARANTE (nenhuma depende do frontend)
 --   • Estoque (items.quantity) SÓ muda por movimentação — nunca por UPDATE direto.
@@ -32,6 +33,12 @@
 --   • Preço, desconto, juros e taxa de cartão são calculados AQUI, não no navegador.
 --   • O evento de notificação nasce na MESMA transação da venda (outbox); se o
 --     Telegram cair, a venda continua válida e o envio é repetido depois.
+--   • Fornecedor é da NOTA de entrada: compra exige fornecedor e ele fica gravado em
+--     movements.supplier_id; "INVENTARIO" é placeholder e nunca vale como fornecedor.
+--   • Estoque baixo = saldo ABAIXO do mínimo; esgotado = saldo 0; mínimo 0 nunca alerta
+--     (stock_status é a regra única; Dashboard, Produtos e Reposição só leem dela).
+--   • Nome de produto em CAIXA ALTA; SKU/código de barras são texto, únicos e sem perder zero.
+--   • Entrada de estoque é idempotente (chave): clique duplo não registra duas vezes.
 --
 -- PERMISSÕES
 --                                   vendedor    gerente    admin / ceo
@@ -2167,7 +2174,7 @@ grant  execute on function public.item_sales_ranking()                          
 
 
 -- ============================================================================
--- 14. CADASTRO DE PRODUTOS: normalização, unicidade e auditoria de saldo
+-- 13. CADASTRO DE PRODUTOS: normalização, unicidade e auditoria de saldo
 -- ============================================================================
 
 -- Nome sempre em CAIXA ALTA e sem espaços sobrando; SKU em caixa alta; vazio vira NULL.
@@ -2263,7 +2270,7 @@ grant  execute on function public.stock_status(numeric, numeric, boolean) to aut
 
 
 -- ============================================================================
--- 13. REALTIME — alerta de estoque baixo em tempo real
+-- 14. REALTIME — alerta de estoque baixo em tempo real
 --     (idempotente: o Postgres não tem "add to publication if not exists")
 -- ============================================================================
 do $$
